@@ -29,11 +29,35 @@ const getUserActiveCallsHandler: RequestHandler<{ userId: string }> = (req, res)
 
 router.get('/user/:userId/active', getUserActiveCallsHandler);
 
+const DEFAULT_ADMIN_PAGE = 50;
+const ADMIN_MAX_LIMIT = 200;
+
 // Get all active calls (admin endpoint)
-const getAllActiveCallsHandler: RequestHandler = (_req, res) => {
+const getAllActiveCallsHandler: RequestHandler = (req, res) => {
   const activeCalls = getAllActiveCalls();
-  
-  res.json({ activeCalls, count: activeCalls.length });
+
+  let limit = DEFAULT_ADMIN_PAGE;
+  const limitParam = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : NaN;
+  if (!Number.isNaN(limitParam) && limitParam > 0) limit = Math.min(limitParam, ADMIN_MAX_LIMIT);
+
+  let skip = 0;
+  const skipParam = typeof req.query.skip === 'string' ? parseInt(req.query.skip, 10) : NaN;
+  if (!Number.isNaN(skipParam) && skipParam >= 0) skip = skipParam;
+
+  const slice = activeCalls.slice(skip, skip + limit + 1);
+  const hasMore = slice.length > limit;
+  const data = slice.slice(0, limit);
+
+  res.json({
+    data,
+    pagination: {
+      skip,
+      limit,
+      hasMore,
+    },
+    count: activeCalls.length,
+    activeCalls: data,
+  });
 };
 
 router.get('/admin/active', getAllActiveCallsHandler);

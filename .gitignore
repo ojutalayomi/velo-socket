@@ -1,3 +1,4 @@
 node_modules/
 dist/
 .env
+src/scripts/seed-posts.ts

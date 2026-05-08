@@ -8,6 +8,7 @@ io.on('connection', async (socket) => {
 
     // Handle follow event
     socket.on('follow', async (data: { followedDetails: any, followerDetails: any, time: string }) => {
+        console.log('follow event received', data);
         try {
             const { followedDetails, followerDetails, time } = data;
             
@@ -32,6 +33,7 @@ io.on('connection', async (socket) => {
 
     // Handle unfollow event
     socket.on('unfollow', async (data: { followedDetails: any, followerDetails: any, time: string }) => {
+        console.log('unfollow event received', data);
         try {
             const { followedDetails, followerDetails, time } = data;
             
