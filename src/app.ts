@@ -5,7 +5,6 @@ import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
 import { updateUserOnlineStatus, updateLastActive, fetchUserGroup, updateReadReceipts, HEARTBEAT_INTERVAL, ONLINE_USERS_KEY, USER_TIMEOUT } from './utils.js';
-import { getMongoDb } from './mongodb.js';
 import './socket/chats.js'
 import './socket/blog.js'
 import './socket/follow.js'
@@ -45,8 +44,6 @@ io.on('connection', async (socket: UserSocket) => {
       statusUpdates.clear();
     }
   }, BATCH_INTERVAL);
-
-  const db = await getMongoDb()
 
   socket.on('register', async () => {
     // console.log('Connected to the socket ctrl:', userId);
@@ -299,4 +296,15 @@ server.listen(port, () => {
 }).on('error', async (error) => {
   console.error('Server error ->', error.message);
   isPortInUse = await checkPortBySystem(port);
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received. Closing HTTP server...');
+  server.close(() => {
+    console.log('HTTP server closed. Exiting.');
+    process.exit(0);
+  });
+  
+  // Force close after 10s if stuck
+  setTimeout(() => process.exit(1), 10000);
 });

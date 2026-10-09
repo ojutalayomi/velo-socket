@@ -1,4 +1,4 @@
-import { Redis } from 'ioredis';
+import type { Redis } from 'ioredis';
 import { io } from './socket.js';
 import { redis as sharedRedis } from './redis.js';
 

@@ -60,18 +60,9 @@ export class ChatMessage implements MessageSchema {
     }
   
     /**
-     * Factory method to create a ChatMessage instance from a raw Gemini API response.
-     * This method only takes the Gemini response and the essential IDs for the chat context.
-     * @access For Backend Only
-     * @param apiResponse The full JSON response from the Gemini API.
-     * @param chatId The ID of the conversation thread.
-     * @param humanUserId The ID of the human user (the original sender, now the receiver).
-     * @param botUserId The ID of the bot/system account (the new sender).
-     * @param messageType The type of message (e.g., 'DM').
-     * @param chatType The type of chat (e.g., 'DM').
-     * @returns A ChatMessage instance.
+     * Factory method to create a ChatMessage instance from a raw OpenRouter response.
      */
-    public static async fromGeminiResponse(
+    public static async fromOpenRouterResponse(
         apiResponse: any,
         chatId: string,
         humanUserId: string,
@@ -79,13 +70,22 @@ export class ChatMessage implements MessageSchema {
         messageType: MessageType,
         chatType: ChatType
     ): Promise<ChatMessage | null> {
-        
-        // 1. Extract the content string from the response
-        const firstCandidate = apiResponse.candidates?.[0];
-        const responseText = firstCandidate?.content.parts[0].text;
+        const content = apiResponse?.choices?.[0]?.message?.content;
+        const responseText = Array.isArray(content)
+            ? content
+                .map((part: any) => {
+                    if (typeof part === 'string') {
+                        return part;
+                    }
+
+                    return part?.text || '';
+                })
+                .join('\n')
+                .trim()
+            : (typeof content === 'string' ? content.trim() : '');
         
         if (!responseText) {
-            console.error("Gemini response is empty or invalid.");
+            console.error("OpenRouter response is empty or invalid.");
             return null;
         }
 

@@ -1,8 +1,7 @@
 import { Router } from 'express';
 import type { RequestHandler } from 'express';
-import { GoogleGenAI } from "@google/genai";
+import OpenAI from 'openai';
 import { MessageAttributes, UserSchema } from '../types.js';
-import { offlineMessageManager } from '../offline-messages.js';
 import { ChatMessage } from '../lib/ChatMessage.js';
 import { chatSocketHandler } from '../lib/chatSocketHandler.js';
 import { MongoDBClient } from '../mongodb.js';
@@ -12,8 +11,36 @@ import { SocialMediaUser } from '../lib/User.js';
 
 const router = Router();
 
-// Access your API key from environment variables
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+const openRouter = new OpenAI({
+  apiKey: process.env.OPENROUTER_API_KEY || '',
+  baseURL: 'https://openrouter.ai/api/v1',
+  defaultHeaders: {
+    ...(process.env.OPENROUTER_SITE_URL ? { 'HTTP-Referer': process.env.OPENROUTER_SITE_URL } : {}),
+    ...(process.env.OPENROUTER_APP_NAME ? { 'X-Title': process.env.OPENROUTER_APP_NAME } : {}),
+  },
+});
+
+const toOpenRouterMessage = (message: MessageAttributes, humanUserId: string) => {
+  const role = message.sender.id === humanUserId ? 'user' : 'assistant';
+  const firstAttachment = Array.isArray(message.attachments) && message.attachments.length > 0
+    ? message.attachments[0]
+    : null;
+
+  if (!firstAttachment?.url || !firstAttachment.type?.startsWith('image/')) {
+    return {
+      role,
+      content: message.content,
+    };
+  }
+
+  return {
+    role,
+    content: [
+      { type: 'text', text: message.content },
+      { type: 'image_url', image_url: { url: firstAttachment.url } },
+    ],
+  };
+};
 
 const chatHandler: RequestHandler = async (req, res) => {
   let bot: SocialMediaUser | null = null;
@@ -39,60 +66,21 @@ const chatHandler: RequestHandler = async (req, res) => {
     io.to(bot._id.toString()).emit('userTyping', { data: bot?.getClientSafeData(), to: bot?._id.toString() });
     const messages = req.body.messages as MessageAttributes[];
 
-    const chat = genAI.chats.create({
-        model: process.env.GEMINI_MODEL || '',
-        history: messages.slice(0, -1).map(msg => {
-            const hasAttachment = Array.isArray(msg.attachments) && msg.attachments.length > 0;
-            const parts = [
-                { text: msg.content },
-                ...(hasAttachment
-                    ? [{
-                        fileData: {
-                            displayName: msg.attachments[0].name,
-                            fileUri: msg.attachments[0].url,
-                            mimeType: msg.attachments[0].type
-                        }
-                    }]
-                    : [])
-            ];
-
-            return {
-                role: msg.sender.id === 'user' ? 'user' : 'model',
-                parts,
-            };
-        }),
-        config: {
-          maxOutputTokens: 5000,
-          stopSequences: [
-            "porn",
-            "Pornography",
-            "NSFW",
-            "OnlyFans",
-            "explicit"
-          ],
-        },
-    });
-
     const lastUserMessage = messages[messages.length - 1];
-    const lastHasAttachment = Array.isArray(lastUserMessage.attachments) && lastUserMessage.attachments.length > 0;
-    const messagePayload: any = lastHasAttachment
-      ? {
-          text: lastUserMessage.content,
-          fileData: {
-            displayName: lastUserMessage.attachments[0].name,
-            fileUri: lastUserMessage.attachments[0].url,
-            mimeType: lastUserMessage.attachments[0].type,
-          },
-        }
-      : {
-          text: lastUserMessage.content,
-        };
-
-    const result = await chat.sendMessage({
-        message: messagePayload
+    const result = await openRouter.chat.completions.create({
+        model: process.env.OPENROUTER_MODEL || process.env.GEMINI_MODEL || 'openai/gpt-4o-mini',
+        messages: messages.map((message) => toOpenRouterMessage(message, lastUserMessage.sender.id)) as any,
+        max_tokens: 5000,
+        stop: [
+          'porn',
+          'Pornography',
+          'NSFW',
+          'OnlyFans',
+          'explicit'
+        ],
     });
 
-    const botResponse = await ChatMessage.fromGeminiResponse(
+    const botResponse = await ChatMessage.fromOpenRouterResponse(
       result, 
       lastUserMessage.chatId, 
       lastUserMessage.sender.id, 
@@ -109,12 +97,12 @@ const chatHandler: RequestHandler = async (req, res) => {
 
     io.to(lastUserMessage.receiverId).emit('userStopTyping', { data: bot?.getClientSafeData(), to: bot?._id.toString() });
 
-    await chatSocketHandler(lastUserMessage, db);
-    await chatSocketHandler(botResponse.toMessageAttributes(), db);
+    void chatSocketHandler(lastUserMessage, db).catch(err => console.error("Error handling user message in chatSocketHandler:", err));
+    void chatSocketHandler(botResponse.toMessageAttributes(), db).catch(err => console.error("Error handling bot response in chatSocketHandler:", err));
     res.json({ result: botResponse.toMessageAttributes(), reply: botResponse.content });
     return;
   } catch (error) {
-    console.error("Error communicating with Gemini API:", error);
+    console.error('Error communicating with OpenRouter API:', error);
     io.to(req.body.messages[req.body.messages.length - 1].receiverId).emit('userStopTyping', { data: bot?.getClientSafeData(), to: bot?._id.toString() || "" });
     res.status(500).json(
       { error: "Failed to get a response from the chatbot." },

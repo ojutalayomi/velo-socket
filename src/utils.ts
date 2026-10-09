@@ -1,7 +1,7 @@
 import { ObjectId } from 'mongodb';
 import { io } from './socket.js';
-import { getMongoDb, MongoDBClient } from './mongodb.js';
-import Redis from 'ioredis';
+import { MongoDBClient } from './mongodb.js';
+import type Redis from 'ioredis';
 
 export const ONLINE_USERS_KEY = 'online_users';
 export const HEARTBEAT_INTERVAL = 30000; // 30 seconds

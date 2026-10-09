@@ -1,0 +1,57 @@
+name: velo-socket
+services:
+  - name: api
+    type: web
+    build:
+      type: docker
+      dockerfile: Dockerfile
+      context: .
+    routes:
+      - path: /
+    ports:
+      - port: 8080
+        protocol: http
+    env:
+      - key: PORT
+        value: "8080"
+      - key: NODE_ENV
+        value: production
+
+      # MongoDB
+      - key: MONGOLINK
+        secret: MONGOLINK               # define as a secret in Koyeb
+      - key: MONGODB_DATABASE
+        secret: MONGODB_DATABASE
+
+      # Redis
+      - key: REDIS_URL
+        secret: REDIS_URL
+
+      # AWS S3
+      - key: AWS_ACCESSKEY
+        secret: AWS_ACCESSKEY
+      - key: AWS_SECRETKEY
+        secret: AWS_SECRETKEY
+
+      # CORS origins (add more if needed)
+      - key: ALLOWED_URL
+        secret: ALLOWED_URL
+      - key: ALLOWED_URL_1
+        secret: ALLOWED_URL_1
+      - key: ALLOWED_URL_2
+        secret: ALLOWED_URL_2
+
+      # OpenRouter / AI
+      - key: OPENROUTER_API_KEY
+        secret: OPENROUTER_API_KEY
+      - key: OPENROUTER_SITE_URL
+        secret: OPENROUTER_SITE_URL
+      - key: OPENROUTER_APP_NAME
+        secret: OPENROUTER_APP_NAME
+      - key: OPENROUTER_MODEL
+        secret: OPENROUTER_MODEL
+
+    healthcheck:
+      path: /health
+      interval: 10s
+      timeout: 5s
