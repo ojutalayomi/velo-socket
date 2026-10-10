@@ -15,7 +15,6 @@ import { app, corsOptions, server } from './server.js';
 import callsRouter from './routes/calls.js';
 import { offlineMessageManager } from './offline-messages.js';
 import { redis as sharedRedis } from './redis.js';
-import { checkPortBySystem } from './checkPort.js';
 import chatHandler from './api/chat.js';
 
 app.use(cors(corsOptions));
@@ -123,14 +122,14 @@ io.on('connection', async (socket: UserSocket) => {
   socket.on('join-room', async (roomId) => {
     // Add type checking and logging
     console.log('join-room called with:', roomId, 'type:', typeof roomId);
-    
+
     if (typeof roomId !== 'string') {
       console.error('Invalid roomId type:', typeof roomId, 'value:', roomId);
       return;
     }
-    
+
     socket.join(roomId);
-    
+
     // Check if this is a call room (starts with 'call_')
     if (roomId.startsWith('call_')) {
       // Call room - just join, no Redis storage needed
@@ -263,8 +262,8 @@ app.get("/socket", (_, res) => {
 });
 
 app.get("/health", (_, res) => {
-  res.status(200).json({ 
-    status: 'healthy', 
+  res.status(200).json({
+    status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
   });
@@ -283,19 +282,10 @@ app.all("*", (_, res) => {
 })
 
 // Start the server
-let isPortInUse = await checkPortBySystem(port);
-
-while (isPortInUse.inUse) {
-  console.log(`Port ${port} is already in use`);
-  port = port + 1;
-  isPortInUse = await checkPortBySystem(port);
-}
-
 server.listen(port, () => {
   console.log(`Listening on port ${port}...`);
 }).on('error', async (error) => {
   console.error('Server error ->', error.message);
-  isPortInUse = await checkPortBySystem(port);
 });
 
 process.on('SIGINT', () => {
@@ -304,7 +294,7 @@ process.on('SIGINT', () => {
     console.log('HTTP server closed. Exiting.');
     process.exit(0);
   });
-  
+
   // Force close after 10s if stuck
   setTimeout(() => process.exit(1), 10000);
 });
