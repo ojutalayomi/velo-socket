@@ -4,7 +4,6 @@ import { AttachmentSchema, ChatParticipant, ConvoType1, MessageAttributes, Messa
 import { MongoDBClient } from "../mongodb.js";
 import { io, UserSocket } from '../socket.js';
 import { offlineMessageManager } from '../offline-messages.js';
-import { ChatMessage } from "../lib/ChatMessage.js";
 import { chatSocketHandler } from "../lib/chatSocketHandler.js";
 
 io.on('connection', async (socket: UserSocket) => {
@@ -36,7 +35,7 @@ io.on('connection', async (socket: UserSocket) => {
       // console.log(data.chat.participants)
       if (data.chat && data.chat.participants && data.chat.participants.length > 0) {
         const participantUserIds = Array.from(new Set(data.chat.participants.map(participant => participant.userId)));
-        
+
         await offlineMessageManager.broadcastMessage({
           type: 'newChat',
           data
@@ -121,11 +120,11 @@ io.on('connection', async (socket: UserSocket) => {
           if (data.updates.convo) {
             const chatId = new ObjectId(id);
             const chat = await db.chats().findOne({ _id: chatId });
-            
+
             if (!chat) {
               // console.log('Chat not found:', id);
               // Emit an error event to the client
-              io.to(`user:${userId}`).emit('chatError', { 
+              io.to(`user:${userId}`).emit('chatError', {
                 error: 'Chat not found',
                 chatId: id,
                 updates: updates
@@ -138,7 +137,7 @@ io.on('connection', async (socket: UserSocket) => {
             const result1 = await db.chatMessages().deleteMany({ chatId: chatId.toString() });
             const messages = await db.chatMessages().find({ chatId: chatId.toString() }).toArray();
             // console.log(result,result1,messages)
-            
+
             // Delete attachments from S3 if they exist
             if (messages && messages.length > 0) {
               for (const message of messages) {
@@ -151,7 +150,7 @@ io.on('connection', async (socket: UserSocket) => {
                 }
               }
             }
-            
+
             const result2 = await db.chatParticipants().deleteMany({ chatId: chatId.toString() })
             // console.log(result2)
             const result3 = await db.readReceipts().deleteMany({ chatId: chatId.toString() })

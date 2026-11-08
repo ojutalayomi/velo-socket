@@ -1,7 +1,7 @@
 import { ObjectId } from "mongodb";
 import { offlineMessageManager } from "../offline-messages.js";
 import { io } from "../socket.js";
-import { MessageAttributes, ChatParticipant, AttachmentSchema, msgStatus, MessageType } from "../types.js";
+import { MessageAttributes, ChatParticipant, AttachmentSchema, msgStatus, MessageType, MentionNotification } from "../types.js";
 import { ChatMessage } from "./ChatMessage.js";
 import * as S3 from "../s3.js";
 import { MongoDBClient } from "../mongodb.js";
@@ -240,6 +240,47 @@ export const chatSocketHandler = async (data: MessageAttributes & { participants
       } else {
         // Initialize isRead with just the sender if no participants
         message.isRead = { [senderId]: true };
+      }
+
+      // Process mentions and notify mentioned users
+      if (data.mentions && data.mentions.length > 0) {
+        try {
+          // Build the set of valid participant user IDs for this chat (used for group validation)
+          let participantUserIds: Set<string> | null = null;
+          if (data.chatType === 'Group' || data.chatType === 'Channels') {
+            const participants = await db.chatParticipants().find({ chatId: data.chatId }).toArray();
+            participantUserIds = new Set(participants.map(p => p.userId));
+          }
+
+          const mentionNotification: MentionNotification = {
+            messageId: message._id?.toString() || '',
+            chatId: message.chatId,
+            chatType: message.chatType,
+            mentionedBy: {
+              userId: message.sender.id,
+              username: message.sender.username,
+              displayPicture: message.sender.displayPicture,
+            },
+            content: message.content,
+            timestamp: message.timestamp,
+          };
+
+          for (const mention of data.mentions) {
+            // Never notify the sender about their own mention
+            if (mention.userId === senderId) continue;
+
+            // For group/channel chats, skip users who aren't participants
+            if (participantUserIds && !participantUserIds.has(mention.userId)) continue;
+
+            await offlineMessageManager.broadcastMessage(
+              { type: 'mentionNotification', data: mentionNotification },
+              undefined,
+              [mention.userId]
+            );
+          }
+        } catch (error) {
+          console.error('Error processing mention notifications:', error);
+        }
       }
 
       if (data.chatType === 'Group') {

@@ -33,7 +33,7 @@ try {
     let globalWithMongo = global as typeof globalThis & {
       _mongoClientPromise?: Promise<MongoClient>
     }
-  
+
     if (!globalWithMongo._mongoClientPromise) {
       client = new MongoClient(uri, options);
       globalWithMongo._mongoClientPromise = client.connect();
@@ -246,7 +246,7 @@ export class MongoDBClient {
   }
 }
 
-export async function getMongoDb(dbName: string = 'mydb') {
+export async function getMongoDb(dbName: string = process.env.MONGODB_DATABASE || 'mydb') {
   const client = await getMongoClient();
   return client.db(dbName);
 }

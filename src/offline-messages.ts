@@ -18,7 +18,8 @@ export interface OfflineMessage {
     | 'joinChat'
     | 'followNotification'
     | 'statusCreated'
-    | 'statusDeleted';
+    | 'statusDeleted'
+    | 'mentionNotification';
   userId: string;
   data: any;
   timestamp: number;

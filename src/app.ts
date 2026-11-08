@@ -271,9 +271,13 @@ app.get("/health", (_, res) => {
 
 // Error handling middleware
 app.use((err: any, req: any, res: any, next: any) => {
+  if (err.message === 'Not allowed by CORS') {
+    return res.status(403).json({ error: 'CORS: origin not allowed' });
+  }
   console.error('Error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
+
 
 app.all("*", (_, res) => {
   const __filename = fileURLToPath(import.meta.url);

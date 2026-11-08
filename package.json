@@ -38,7 +38,7 @@
     "@types/multer-s3": "^3.0.3",
     "@types/node": "^22.18.5",
     "@types/socket.io": "^3.0.1",
-    "nodemon": "^3.1.7",
+    "nodemon": "^1.14.10",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.2"
   }
