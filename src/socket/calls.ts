@@ -1,5 +1,46 @@
+import { ObjectId } from 'mongodb';
 import { io, UserSocket } from '../socket.js';
 import { redis } from '../app.js';
+import { MongoDBClient } from '../mongodb.js';
+import { offlineMessageManager } from '../offline-messages.js';
+import { sendPushToUsers } from '../push.js';
+
+async function notifyMissedCall(
+  callerId: string,
+  targetUserId: string,
+  callType: 'audio' | 'video',
+  callId: string
+) {
+  try {
+    const offlineTargets = await offlineMessageManager.filterOfflineUsers([targetUserId]);
+    if (offlineTargets.length === 0) return;
+
+    let callerName = 'Someone';
+    try {
+      if (ObjectId.isValid(callerId)) {
+        const db = await new MongoDBClient().init();
+        const caller = await db.users().findOne({ _id: new ObjectId(callerId) });
+        if (caller) {
+          callerName =
+            [caller.firstname, caller.lastname].filter(Boolean).join(' ').trim() ||
+            caller.username ||
+            'Someone';
+        }
+      }
+    } catch (error) {
+      console.error('Error loading caller for push notification:', error);
+    }
+
+    await sendPushToUsers(offlineTargets, {
+      title: `Incoming ${callType} call`,
+      body: `${callerName} is calling you`,
+      url: '/chats',
+      tag: `call-${callId}`,
+    });
+  } catch (error) {
+    console.error('Error sending call push notification:', error);
+  }
+}
 
 // Store active calls and their participants
 const activeCalls = new Map<string, {
@@ -59,6 +100,8 @@ export const handleCallInvite = (socket: UserSocket, data: {
         callType,
         chatType
       });
+
+      void notifyMissedCall(callerId, targetUserId, callType, callId);
     }
   }
   

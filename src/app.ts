@@ -293,7 +293,7 @@ server.listen(port, () => {
 });
 
 process.on('SIGINT', () => {
-  console.log('SIGINT received. Closing HTTP server...');
+  console.log('\nSIGINT received. Closing HTTP server...');
   server.close(() => {
     console.log('HTTP server closed. Exiting.');
     process.exit(0);

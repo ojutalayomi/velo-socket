@@ -86,6 +86,17 @@ export class OfflineMessageManager {
   }
 
   /**
+   * Filter a list of user ids down to those without an active socket connection.
+   */
+  async filterOfflineUsers(userIds: string[]): Promise<string[]> {
+    const uniqueUserIds = Array.from(new Set(userIds.filter(Boolean)));
+    if (uniqueUserIds.length === 0) return [];
+
+    const onlineUsers = new Set(await this.redis.smembers('online_users'));
+    return uniqueUserIds.filter((userId) => !onlineUsers.has(userId));
+  }
+
+  /**
    * Get all offline users
    */
   async getOfflineUsers(): Promise<string[]> {

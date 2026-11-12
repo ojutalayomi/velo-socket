@@ -5,6 +5,7 @@ import { MessageAttributes, ChatParticipant, AttachmentSchema, msgStatus, Messag
 import { ChatMessage } from "./ChatMessage.js";
 import * as S3 from "../s3.js";
 import { MongoDBClient } from "../mongodb.js";
+import { messagePreview, sendPushToUsers } from "../push.js";
 
 export const chatSocketHandler = async (data: MessageAttributes & { participants?: ChatParticipant[] }, db: MongoDBClient) => {
     const senderId = data.sender?.id;
@@ -243,6 +244,7 @@ export const chatSocketHandler = async (data: MessageAttributes & { participants
       }
 
       // Process mentions and notify mentioned users
+      const mentionedUserIds: string[] = [];
       if (data.mentions && data.mentions.length > 0) {
         try {
           // Build the set of valid participant user IDs for this chat (used for group validation)
@@ -272,11 +274,28 @@ export const chatSocketHandler = async (data: MessageAttributes & { participants
             // For group/channel chats, skip users who aren't participants
             if (participantUserIds && !participantUserIds.has(mention.userId)) continue;
 
+            mentionedUserIds.push(mention.userId);
+
             await offlineMessageManager.broadcastMessage(
               { type: 'mentionNotification', data: mentionNotification },
               undefined,
               [mention.userId]
             );
+          }
+
+          if (mentionedUserIds.length > 0) {
+            const offlineMentioned = await offlineMessageManager.filterOfflineUsers(
+              mentionedUserIds
+            );
+            void sendPushToUsers(offlineMentioned, {
+              title: `${message.sender.username || 'Someone'} mentioned you`,
+              body: messagePreview(message.content, attachmentsWithUrls.length),
+              url:
+                message.chatType === 'Group'
+                  ? `/chats/group/${message.chatId}`
+                  : `/chats/${message.chatId}`,
+              tag: `mention-${message.chatId}`,
+            });
           }
         } catch (error) {
           console.error('Error processing mention notifications:', error);
@@ -292,6 +311,16 @@ export const chatSocketHandler = async (data: MessageAttributes & { participants
             type: 'newMessage',
             data: message.toMessageAttributes(attachmentsWithUrls)
           }, undefined, userIds);
+
+          const offlineRecipients = await offlineMessageManager.filterOfflineUsers(
+            userIds.filter((id) => id !== senderId && !mentionedUserIds.includes(id))
+          );
+          void sendPushToUsers(offlineRecipients, {
+            title: message.sender.username || 'New message',
+            body: messagePreview(message.content, attachmentsWithUrls.length),
+            url: `/chats/group/${message.chatId}`,
+            tag: `chat-${message.chatId}`,
+          });
         } catch (error) {
           console.error('Error queuing group message for offline users:', error);
         }
@@ -304,6 +333,16 @@ export const chatSocketHandler = async (data: MessageAttributes & { participants
             type: 'newMessage',
             data: message.toMessageAttributes(attachmentsWithUrls)
           }, undefined, targets);
+
+          const offlineRecipients = await offlineMessageManager.filterOfflineUsers(
+            [data.receiverId].filter((id) => id !== senderId && !mentionedUserIds.includes(id))
+          );
+          void sendPushToUsers(offlineRecipients, {
+            title: message.sender.username || 'New message',
+            body: messagePreview(message.content, attachmentsWithUrls.length),
+            url: `/chats/${message.chatId}`,
+            tag: `chat-${message.chatId}`,
+          });
         } catch (error) {
           console.error('Error queuing direct message for offline users:', error);
         }

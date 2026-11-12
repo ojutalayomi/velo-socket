@@ -2,6 +2,7 @@ import { io } from '../socket.js';
 import { redis } from '../app.js';
 import { ONLINE_USERS_KEY } from '../utils.js';
 import { offlineMessageManager } from '../offline-messages.js';
+import { sendPushToUsers } from '../push.js';
 
 io.on('connection', async (socket) => {
     // Handle follow event
@@ -25,6 +26,15 @@ io.on('connection', async (socket) => {
             if (isOnline) {
                 io.emit('userStatus', { userId: String(followerDetails._id), status: 'online' });
             }
+
+            const offlineFollowers = await offlineMessageManager.filterOfflineUsers([followedId]);
+            void sendPushToUsers(offlineFollowers, {
+                title: 'New follower',
+                body: `${followerDetails.username || 'Someone'} started following you`,
+                url: `/${followerDetails.username || ''}`,
+                tag: `follow-${String(followerDetails._id)}`,
+            });
+
             ack?.();
         } catch (error) {
             console.error('Error handling follow event:', error);
