@@ -34,6 +34,7 @@ export async function sendPushToUsers(userIds: string[], payload: PushPayload): 
   if (recipients.length === 0 || !secret || !serviceUrl) return;
 
   try {
+    console.log(`${serviceUrl}${PUSH_ENDPOINT}`);
     const response = await fetch(`${serviceUrl}${PUSH_ENDPOINT}`, {
       method: 'POST',
       headers: {
