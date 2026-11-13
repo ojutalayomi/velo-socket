@@ -197,7 +197,7 @@ io.on('connection', async (socket: UserSocket) => {
     });
 
     socket.on('chatMessage', async (data: MessageAttributes & { participants?: ChatParticipant[] }) => {
-      await chatSocketHandler(data, db);
+      await chatSocketHandler(data, db, userId);
     });
 
     socket.on('typing', (data: { user: Partial<UserSchema>, to: string }) => {

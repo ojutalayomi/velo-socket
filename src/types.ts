@@ -94,13 +94,42 @@ export type UserSchema = {
   accountType: AccountType,
 };
 
+export type DndWindow = {
+  enabled: boolean;
+  /** Local time in `HH:mm`, inclusive. */
+  start: string;
+  /** Local time in `HH:mm`, exclusive. */
+  end: string;
+  /** IANA time zone, e.g. `Europe/London`. */
+  timezone: string;
+}
+
+export type NotificationPreferences = {
+  messages: boolean;
+  mentions: boolean;
+  follows: boolean;
+  calls: boolean;
+  dnd: DndWindow;
+  hideMessagePreview: boolean;
+}
+
 export type UserSettings = {
+  _id?: ObjectId;
+  userId?: string;
+  notifications?: NotificationPreferences;
   twoFactorAuth: boolean;
   loginAlerts: boolean;
   showOnlineStatus: boolean;
   showLastSeen: boolean;
   showReadReceipts: boolean;
   showTypingStatus: boolean;
+}
+
+export type BlockedUser = {
+  _id: ObjectId;
+  blockerId: string;
+  blockedId: string;
+  createdAt: string;
 }
 
 export type FollowersSchema = {

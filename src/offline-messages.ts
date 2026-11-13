@@ -1,6 +1,11 @@
 import type { Redis } from 'ioredis';
 import { io } from './socket.js';
 import { redis as sharedRedis } from './redis.js';
+import {
+  filterOfflineUsers as filterOfflinePresence,
+  getOnlineUserIds,
+  isUserOnline as isPresenceOnline,
+} from './presence.js';
 
 export interface OfflineMessage {
   id: string;
@@ -81,27 +86,14 @@ export class OfflineMessageManager {
    * Check if a user is online
    */
   async isUserOnline(userId: string): Promise<boolean> {
-    const isOnline = await this.redis.sismember('online_users', userId);
-    return Boolean(isOnline);
+    return isPresenceOnline(this.redis, userId);
   }
 
   /**
    * Filter a list of user ids down to those without an active socket connection.
    */
   async filterOfflineUsers(userIds: string[]): Promise<string[]> {
-    const uniqueUserIds = Array.from(new Set(userIds.filter(Boolean)));
-    if (uniqueUserIds.length === 0) return [];
-
-    const onlineUsers = new Set(await this.redis.smembers('online_users'));
-    return uniqueUserIds.filter((userId) => !onlineUsers.has(userId));
-  }
-
-  /**
-   * Get all offline users
-   */
-  async getOfflineUsers(): Promise<string[]> {
-    const allUsers = await this.redis.smembers('online_users');
-    return [];
+    return filterOfflinePresence(this.redis, userIds);
   }
 
   /**
@@ -112,14 +104,16 @@ export class OfflineMessageManager {
     excludeUserId?: string,
     targetUserIds?: string[]
   ): Promise<void> {
-    const onlineUsers = await this.redis.smembers('online_users');
-    
-    // If specific target users are provided, use those; otherwise broadcast to all
-    const usersToNotify = targetUserIds || onlineUsers;
-    
+    const onlineUsers = new Set(await getOnlineUserIds(this.redis));
+
+    // If specific target users are provided, use those; otherwise broadcast to all online users
+    const usersToNotify = targetUserIds
+      ? Array.from(new Set(targetUserIds.filter(Boolean)))
+      : Array.from(onlineUsers);
+
     for (const userId of usersToNotify) {
-      const isOnline = onlineUsers.includes(userId);
-      
+      const isOnline = onlineUsers.has(userId);
+
       if (isOnline && userId !== excludeUserId) {
         // Send directly to online users
         io.to(`user:${userId}`).emit(message.type, message.data);

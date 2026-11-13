@@ -4,7 +4,8 @@ import cors from "cors";
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
-import { updateUserOnlineStatus, updateLastActive, fetchUserGroup, updateReadReceipts, HEARTBEAT_INTERVAL, ONLINE_USERS_KEY, USER_TIMEOUT } from './utils.js';
+import { updateUserOnlineStatus, updateLastActive, fetchUserGroup, updateReadReceipts, HEARTBEAT_INTERVAL } from './utils.js';
+import { heartbeat, isUserOnline, markConnected, markDisconnected, startPresenceSweep } from './presence.js';
 import './socket/chats.js'
 import './socket/blog.js'
 import './socket/follow.js'
@@ -16,6 +17,7 @@ import callsRouter from './routes/calls.js';
 import { offlineMessageManager } from './offline-messages.js';
 import { redis as sharedRedis } from './redis.js';
 import chatHandler from './api/chat.js';
+import { MongoDBClient } from './mongodb.js';
 
 app.use(cors(corsOptions));
 
@@ -27,6 +29,23 @@ let port = Number(process.env.PORT) || 8080;
 console.log('Port:', port);
 
 export const redis = sharedRedis;
+
+startPresenceSweep(sharedRedis);
+
+async function ensureNotificationIndexes() {
+  try {
+    const db = await new MongoDBClient().init();
+    await Promise.all([
+      db.blockedUsers().createIndex({ blockerId: 1, blockedId: 1 }, { unique: true }),
+      db.blockedUsers().createIndex({ blockedId: 1 }),
+      db.userSettings().createIndex({ userId: 1 }, { unique: true }),
+    ]);
+  } catch (error) {
+    console.error('Failed to create notification indexes:', error);
+  }
+}
+
+ensureNotificationIndexes();
 
 // offlineMessageManager is initialized in offline-messages.ts using shared redis
 
@@ -47,12 +66,7 @@ io.on('connection', async (socket: UserSocket) => {
   socket.on('register', async () => {
     // console.log('Connected to the socket ctrl:', userId);
     if (userId) {
-      const isAlreadyConnected = await redis.sismember(ONLINE_USERS_KEY, userId);
       const groups: string[] = (await fetchUserGroup(userId)).map(group =>`group:${group._id.toString()}`);
-      if (!isAlreadyConnected) {
-        await redis.sadd(ONLINE_USERS_KEY, userId);
-        await updateUserOnlineStatus(userId, true, redis, USER_TIMEOUT);
-      }
       // Join personal and group rooms BEFORE emitting pending messages
       socket.join(`user:${userId}`);
       socket.join(groups);
@@ -63,7 +77,10 @@ io.on('connection', async (socket: UserSocket) => {
     }
   });
 
-  updateUserOnlineStatus(userId as string, true, redis, USER_TIMEOUT);
+  if (userId) {
+    await markConnected(redis, userId);
+    await updateUserOnlineStatus(userId, true, redis);
+  }
 
   socket.on('updateSettings', async (data: {
     twoFactorAuth: boolean;
@@ -74,11 +91,6 @@ io.on('connection', async (socket: UserSocket) => {
     showTypingStatus: boolean;
   }) => {
     console.log('updateSettings: ' + data);
-    if (data.showOnlineStatus) {
-      await updateUserOnlineStatus(userId as string, true, redis, USER_TIMEOUT);
-    } else {
-      await updateUserOnlineStatus(userId as string, false, redis, USER_TIMEOUT);
-    }
     if (data.showLastSeen) {
       await updateLastActive(userId as string, redis);
     }
@@ -91,17 +103,19 @@ io.on('connection', async (socket: UserSocket) => {
     updateLastActive(userId as string, redis);
   });
 
-  const heartbeat = setInterval(async () => {
+  const heartbeatTimer = setInterval(() => {
     if (userId) {
-      await updateUserOnlineStatus(userId, true, redis, USER_TIMEOUT);
+      heartbeat(redis, userId).catch((error) => console.error('Heartbeat failed:', error));
     }
   }, HEARTBEAT_INTERVAL);
 
   socket.on('disconnect', async () => {
-    clearInterval(heartbeat);
+    clearInterval(heartbeatTimer);
     if (userId) {
-      await redis.srem(ONLINE_USERS_KEY, userId);
-      await updateUserOnlineStatus(userId, false, redis, USER_TIMEOUT);
+      await markDisconnected(redis, userId);
+      if (!(await isUserOnline(redis, userId))) {
+        await updateUserOnlineStatus(userId, false, redis);
+      }
     }
     socket.removeAllListeners();
   });
@@ -183,7 +197,7 @@ io.on('connection', async (socket: UserSocket) => {
     chatType: 'DM' | 'Group';
   }) => {
     const { handleCallInvite } = await import('./socket/calls.js');
-    handleCallInvite(socket, data);
+    await handleCallInvite(socket, data);
   });
 
   // Call answer handling
@@ -192,7 +206,7 @@ io.on('connection', async (socket: UserSocket) => {
     accepted: boolean;
   }) => {
     const { handleCallAnswer } = await import('./socket/calls.js');
-    handleCallAnswer(socket, data);
+    await handleCallAnswer(socket, data);
   });
 
   // Call end handling
@@ -200,7 +214,7 @@ io.on('connection', async (socket: UserSocket) => {
     callId: string;
   }) => {
     const { handleCallEnd } = await import('./socket/calls.js');
-    handleCallEnd(socket, data);
+    await handleCallEnd(socket, data);
   });
 
   // WebRTC signaling for calls
@@ -234,7 +248,7 @@ io.on('connection', async (socket: UserSocket) => {
 
   socket.on('subscribeToUser', async (userId: string) => {
     socket.join(`user:${userId}`);
-    const isOnline = Boolean(await redis.sismember(ONLINE_USERS_KEY, userId));
+    const isOnline = await isUserOnline(redis, userId);
     io.emit('userStatus', { userId, status: isOnline ? 'online' : 'offline' });
   });
 

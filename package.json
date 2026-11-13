@@ -4,7 +4,7 @@
   "type": "module",
   "main": "dist/app.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "MONGOLINK=mongodb://127.0.0.1:27017/velo-test node --loader ts-node/esm --test src/notifications/__tests__/*.test.ts",
     "start": "node ./dist/app.js",
     "dev": "nodemon",
     "build": "tsc",

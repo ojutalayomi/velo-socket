@@ -3,9 +3,7 @@ import { io } from './socket.js';
 import { MongoDBClient } from './mongodb.js';
 import type Redis from 'ioredis';
 
-export const ONLINE_USERS_KEY = 'online_users';
-export const HEARTBEAT_INTERVAL = 30000; // 30 seconds
-export const USER_TIMEOUT = 60; // 60 seconds
+export const HEARTBEAT_INTERVAL = 15000; // 15 seconds, safely inside the 30s presence window
 
 export function timeFormatter(){
   const time = new Date().toLocaleString()
@@ -20,16 +18,18 @@ export function secretKeyy(){
   return secretKey;
 }
 
-export async function updateUserOnlineStatus(userId: string, isOnline: boolean, redis: Redis, USER_TIMEOUT: number) {
-  const currentStatus = await redis.sismember(ONLINE_USERS_KEY, userId);
-  let status;
+/**
+ * Broadcasts a presence change. The authoritative online state lives in
+ * `presence.ts` (Redis ZSET + connection counts); this only informs clients.
+ */
+export async function updateUserOnlineStatus(
+  userId: string,
+  isOnline: boolean,
+  redis: Redis
+) {
+  const status = isOnline ? 'online' : 'offline';
 
-  if (isOnline) {
-    if (currentStatus === 0) await redis.sadd(ONLINE_USERS_KEY, userId);
-    status = 'online';
-  } else {
-    if (currentStatus === 1) await redis.srem(ONLINE_USERS_KEY, userId);
-    status = 'offline';
+  if (!isOnline) {
     const lastActive = await redis.get(`user:${userId}:lastActive`);
     io.emit('lastActive', { userId, lastActive });
   }

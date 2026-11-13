@@ -1,7 +1,7 @@
 import { config } from 'dotenv';
 config()
 import { Db, MongoClient, ServerApiVersion } from 'mongodb';
-import { AttachmentSchema, ChatData, ChatParticipant, ChatSettings, FollowersSchema, MessageSchema, PostBookmarkSchema, PostLikesSchema, PostSchema, Reaction, ReadReceipt, StatusSchema, StatusViewerSchema, TokensSchema, UserSchema, UserSettings, VideoSchema } from './types';
+import { AttachmentSchema, BlockedUser, ChatData, ChatParticipant, ChatSettings, FollowersSchema, MessageSchema, PostBookmarkSchema, PostLikesSchema, PostSchema, Reaction, ReadReceipt, StatusSchema, StatusViewerSchema, TokensSchema, UserSchema, UserSettings, VideoSchema } from './types';
 
 const uri = process.env.MONGOLINK || '';
 
@@ -219,6 +219,14 @@ export class MongoDBClient {
    */
   userSettings() {
     return this.db.collection<UserSettings>('User_Settings');
+  }
+
+  /**
+   * Gets users blocked by (or blocking) other users.
+   * @returns Collection used to suppress push notifications
+   */
+  blockedUsers() {
+    return this.db.collection<BlockedUser>('Blocked_Users');
   }
 
   /**
