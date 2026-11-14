@@ -5,7 +5,7 @@ import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
 import { updateUserOnlineStatus, updateLastActive, fetchUserGroup, updateReadReceipts, HEARTBEAT_INTERVAL } from './utils.js';
-import { heartbeat, isUserOnline, markConnected, markDisconnected, startPresenceSweep } from './presence.js';
+import { heartbeat, getOnlineUserIds, isUserOnline, markConnected, markDisconnected, startPresenceSweep } from './presence.js';
 import './socket/chats.js'
 import './socket/blog.js'
 import './socket/follow.js'
@@ -73,7 +73,10 @@ io.on('connection', async (socket: UserSocket) => {
 
       // Always attempt to deliver any pending offline messages after joining rooms
       await offlineMessageManager.handleUserOnline(userId);
-      // console.log(`User ${userId} joined group:${groups}`);
+
+      // Send the current presence snapshot so clients that were disconnected
+      // do not keep stale online/offline state from missed status events.
+      socket.emit('onlineUsers', await getOnlineUserIds(redis));
     }
   });
 
