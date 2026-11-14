@@ -1,4 +1,5 @@
 import { Collection, Document, ObjectId } from "mongodb";
+import type Redis from 'ioredis';
 import { getMongoDb, MongoDBClient } from "../mongodb.js";
 import {
     actorFromUser,
@@ -13,6 +14,123 @@ import { BlogPost, NotificationActor, NotificationTarget, PostSchema, ReactionTy
 import { io } from '../socket.js';
 import { deleteFileFromS3 } from "../s3.js";
 import { offlineMessageManager } from '../offline-messages.js';
+import { redis } from '../redis.js';
+import { deliverPush, messagePreview } from '../push.js';
+import { loadNotificationPreferences } from '../notifications/settings.js';
+
+interface MentionPushParams {
+    inboxDb: MongoDBClient;
+    redis: Redis;
+    recipientId: string;
+    actorId: string;
+    actorName: string;
+    postId: string;
+    snippet?: string;
+}
+
+interface SharePushParams {
+    inboxDb: MongoDBClient;
+    redis: Redis;
+    recipientId: string;
+    actorId: string;
+    actorName: string;
+    postId: string;
+    isQuote: boolean;
+    snippet?: string;
+}
+
+/**
+ * Sends a push notification when a user is mentioned in a post or comment.
+ */
+async function sendMentionPushNotification(params: MentionPushParams): Promise<void> {
+    const { inboxDb, redis, recipientId, actorId, actorName, postId, snippet } = params;
+
+    try {
+        const [preferences, blockedRows] = await Promise.all([
+            loadNotificationPreferences(inboxDb, [recipientId]),
+            inboxDb
+                .blockedUsers()
+                .find(
+                    { blockerId: recipientId, blockedId: actorId },
+                    { projection: { blockerId: 1, _id: 0 } }
+                )
+                .toArray(),
+        ]);
+
+        // Skip if user blocked the actor
+        if (blockedRows.length > 0) return;
+
+        const userPrefs = preferences.get(recipientId);
+        // Skip if user has mentions disabled
+        if (!userPrefs?.mentions) return;
+
+        const body = snippet ? messagePreview(snippet, 0) : 'You were mentioned in a post';
+
+        await deliverPush({
+            kind: 'mention',
+            sourceId: postId,
+            userIds: [recipientId],
+            payload: {
+                title: actorName,
+                body,
+                url: `/notifications`,
+                tag: `mention:${postId}`,
+            },
+            requireOffline: true,
+            redis,
+        });
+    } catch (error) {
+        console.error('Error sending mention push notification:', error);
+    }
+}
+
+/**
+ * Sends a push notification when a user's post is shared (reposted or quoted).
+ */
+async function sendSharePushNotification(params: SharePushParams): Promise<void> {
+    const { inboxDb, redis, recipientId, actorId, actorName, postId, isQuote, snippet } = params;
+
+    try {
+        const [preferences, blockedRows] = await Promise.all([
+            loadNotificationPreferences(inboxDb, [recipientId]),
+            inboxDb
+                .blockedUsers()
+                .find(
+                    { blockerId: recipientId, blockedId: actorId },
+                    { projection: { blockerId: 1, _id: 0 } }
+                )
+                .toArray(),
+        ]);
+
+        // Skip if user blocked the actor
+        if (blockedRows.length > 0) return;
+
+        const userPrefs = preferences.get(recipientId);
+        // Skip if user has follow/engagement notifications disabled (we use 'follows' for share notifications)
+        if (!userPrefs?.follows) return;
+
+        const action = isQuote ? 'quoted' : 'reposted';
+        const body = isQuote && snippet 
+            ? messagePreview(snippet, 0)
+            : `${actorName} ${action} your post`;
+
+        await deliverPush({
+            kind: 'follow',
+            sourceId: postId,
+            userIds: [recipientId],
+            payload: {
+                title: isQuote ? actorName : `${actorName} ${action} your post`,
+                body: isQuote ? body : '',
+                url: `/notifications`,
+                tag: `share:${postId}`,
+            },
+            requireOffline: true,
+            redis,
+        });
+    } catch (error) {
+        console.error('Error sending share push notification:', error);
+    }
+}
 
 io.on('connection', (socket) => {
     const userId = socket.handshake.query.userId as string;
@@ -170,6 +288,7 @@ io.on('connection', (socket) => {
         try {
             // Connect to MongoDB
             const db = await new MongoDBClient().init();
+            const inboxDb = await new MongoDBClient().init();
             const collection = db.users();
             const shares = db.postsShares();
             const posts = db.posts();
@@ -280,6 +399,38 @@ io.on('connection', (socket) => {
                             blog: repost,
                         }
                     }, userId);
+
+                    // Notify original post author about the repost
+                    try {
+                        const notificationActor = await loadActor(inboxDb, userId);
+                        const originalAuthorId = post.UserId ? String(post.UserId) : '';
+
+                        if (notificationActor && originalAuthorId && originalAuthorId !== userId) {
+                            const wasRecorded = await recordNotification(inboxDb, {
+                                recipientId: originalAuthorId,
+                                actorId: userId,
+                                actor: notificationActor,
+                                type: 'share',
+                                targetType: PostsOrSharesOrComments === comments ? 'comment' : 'post',
+                                targetId: String(post.PostID),
+                                url: contentUrl(post),
+                            });
+
+                            if (wasRecorded) {
+                                await sendSharePushNotification({
+                                    inboxDb,
+                                    redis,
+                                    recipientId: originalAuthorId,
+                                    actorId: userId,
+                                    actorName: notificationActor.name,
+                                    postId: String(post.PostID),
+                                    isQuote: false,
+                                });
+                            }
+                        }
+                    } catch (error) {
+                        console.error('Error writing repost notifications:', error);
+                    }
                 } else if (data.type === "quote") {
                     // Create a new quoted post
                     const quote: SharedBlogPost = {
@@ -333,6 +484,78 @@ io.on('connection', (socket) => {
                             blog: quote,
                         }
                     }, userId);
+
+                    // Notify original post author and parse mentions from quote caption
+                    try {
+                        const notificationActor = await loadActor(inboxDb, userId);
+                        let mentionedActors: NotificationActor[] = [];
+                        
+                        if (notificationActor) {
+                            mentionedActors = await resolveMentionedUserIds(inboxDb, quote.Caption);
+                        }
+
+                        const originalAuthorId = post.UserId ? String(post.UserId) : '';
+                        const mentionedIds = new Set(mentionedActors.map((actor) => actor.id));
+
+                        // Notify original author (if not the same person and not mentioned)
+                        if (notificationActor && originalAuthorId && originalAuthorId !== userId && !mentionedIds.has(originalAuthorId)) {
+                            const wasRecorded = await recordNotification(inboxDb, {
+                                recipientId: originalAuthorId,
+                                actorId: userId,
+                                actor: notificationActor,
+                                type: 'share',
+                                targetType: PostsOrSharesOrComments === comments ? 'comment' : 'post',
+                                targetId: String(post.PostID),
+                                url: contentUrl(quote),
+                                snippet: quote.Caption,
+                            });
+
+                            if (wasRecorded) {
+                                await sendSharePushNotification({
+                                    inboxDb,
+                                    redis,
+                                    recipientId: originalAuthorId,
+                                    actorId: userId,
+                                    actorName: notificationActor.name,
+                                    postId: String(post.PostID),
+                                    isQuote: true,
+                                    snippet: quote.Caption,
+                                });
+                            }
+                        }
+
+                        // Notify mentioned users
+                        if (notificationActor) {
+                            for (const mention of mentionedActors) {
+                                if (mention.id === userId) continue;
+
+                                const wasRecorded = await recordNotification(inboxDb, {
+                                    recipientId: mention.id,
+                                    actorId: userId,
+                                    actor: notificationActor,
+                                    type: 'mention',
+                                    targetType: 'post',
+                                    targetId: quote.PostID,
+                                    url: contentUrl(quote),
+                                    snippet: quote.Caption,
+                                });
+
+                                if (wasRecorded) {
+                                    await sendMentionPushNotification({
+                                        inboxDb,
+                                        redis,
+                                        recipientId: mention.id,
+                                        actorId: userId,
+                                        actorName: notificationActor.name,
+                                        postId: quote.PostID,
+                                        snippet: quote.Caption,
+                                    });
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        console.error('Error writing quote notifications:', error);
+                    }
                 }
             }
 
@@ -476,7 +699,7 @@ io.on('connection', (socket) => {
                         for (const mention of mentionedActors) {
                             if (mention.id === userId) continue;
 
-                            await recordNotification(inboxDb, {
+                            const wasRecorded = await recordNotification(inboxDb, {
                                 recipientId: mention.id,
                                 actorId: userId,
                                 actor: notificationActor,
@@ -486,6 +709,18 @@ io.on('connection', (socket) => {
                                 url: contentUrl(blog),
                                 snippet: blog.Caption,
                             });
+
+                            if (wasRecorded) {
+                                await sendMentionPushNotification({
+                                    inboxDb,
+                                    redis,
+                                    recipientId: mention.id,
+                                    actorId: userId,
+                                    actorName: notificationActor.name,
+                                    postId: blog.PostID,
+                                    snippet: blog.Caption,
+                                });
+                            }
                         }
                     }
                 } catch (error) {
@@ -507,7 +742,7 @@ io.on('connection', (socket) => {
                         for (const mention of mentionedActors) {
                             if (mention.id === userId) continue;
 
-                            await recordNotification(inboxDb, {
+                            const wasRecorded = await recordNotification(inboxDb, {
                                 recipientId: mention.id,
                                 actorId: userId,
                                 actor: notificationActor,
@@ -517,6 +752,18 @@ io.on('connection', (socket) => {
                                 url: contentUrl(blog),
                                 snippet: blog.Caption,
                             });
+
+                            if (wasRecorded) {
+                                await sendMentionPushNotification({
+                                    inboxDb,
+                                    redis,
+                                    recipientId: mention.id,
+                                    actorId: userId,
+                                    actorName: notificationActor.name,
+                                    postId: blog.PostID,
+                                    snippet: blog.Caption,
+                                });
+                            }
                         }
                     }
                 } catch (error) {

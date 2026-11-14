@@ -132,7 +132,7 @@ export type BlockedUser = {
   createdAt: string;
 }
 
-export type NotificationType = 'like' | 'comment' | 'follow' | 'mention';
+export type NotificationType = 'like' | 'comment' | 'follow' | 'mention' | 'share';
 
 export type NotificationTarget = 'post' | 'comment' | 'chat_message' | 'user';
 
