@@ -1,6 +1,15 @@
 import { Collection, Document, ObjectId } from "mongodb";
 import { getMongoDb, MongoDBClient } from "../mongodb.js";
-import { BlogPost, PostSchema, ReactionType, SharedBlogPost } from "../types.js";
+import {
+    actorFromUser,
+    buildLikeDedupeKey,
+    loadActor,
+    recordNotification,
+    removeNotification,
+} from "../notifications/inApp.js";
+import { resolveMentionedUserIds } from "../notifications/mentions.js";
+import { contentUrl } from "../notifications/targets.js";
+import { BlogPost, NotificationActor, NotificationTarget, PostSchema, ReactionType, SharedBlogPost } from "../types.js";
 import { io } from '../socket.js';
 import { deleteFileFromS3 } from "../s3.js";
 import { offlineMessageManager } from '../offline-messages.js';
@@ -9,6 +18,8 @@ io.on('connection', (socket) => {
     const userId = socket.handshake.query.userId as string;
 
     socket.on('reactToPost', async (data: ReactionType) => {
+
+        let targetType: NotificationTarget = 'post';
 
         try {
             // Connect to MongoDB
@@ -39,6 +50,7 @@ io.on('connection', (socket) => {
                 // Check if the post is a comment
                 post = await comments.findOne({ PostID: data.postId });
                 PostsOrSharesOrComments = comments;
+                targetType = 'comment';
             }
 
             if (!post) {
@@ -69,6 +81,17 @@ io.on('connection', (socket) => {
                     { PostID: data.postId }, 
                     { $inc: { [data.key]: -1 } } // if data.type is like -> { $inc: { [`NoOfLikes`]: -1 } }
                 );
+
+                if (data.type === 'unlike' && post.UserId && post.UserId !== userId) {
+                    try {
+                        await removeNotification(
+                            db,
+                            buildLikeDedupeKey(targetType, data.postId, post.UserId, userId)
+                        );
+                    } catch (error) {
+                        console.error('Error removing like notification:', error);
+                    }
+                }
             } else {
                 // Check if the user has already reacted to the post
                 if (existingReaction) {
@@ -99,6 +122,23 @@ io.on('connection', (socket) => {
                     { PostID: data.postId }, 
                     { $inc: { [data.key]: 1 } } // if data.type is like -> { $inc: { [`NoOfLikes`]: 1 } }
                 );
+
+                if (data.type === 'like' && post.UserId && post.UserId !== userId) {
+                    try {
+                        await recordNotification(db, {
+                            recipientId: post.UserId,
+                            actorId: userId,
+                            actor: actorFromUser(user, userId) ?? undefined,
+                            type: 'like',
+                            targetType,
+                            targetId: post.PostID,
+                            url: contentUrl(post),
+                            snippet: post.Caption,
+                        });
+                    } catch (error) {
+                        console.error('Error writing like notification:', error);
+                    }
+                }
             }
 
             io.to(`user:${userId}`).emit("post_reaction_response", { message: "Reaction added successfully!", success: true, reaction: data.type });
@@ -309,6 +349,7 @@ io.on('connection', (socket) => {
         try {
             // Connect to MongoDB
             const db = await getMongoDb();
+            const inboxDb = await new MongoDBClient().init();
             const collection = db.collection('Users');
             const posts = db.collection('Posts');
             const comments = db.collection('Posts_Comments');
@@ -329,7 +370,7 @@ io.on('connection', (socket) => {
                 UserId: userId,
                 DisplayPicture: user.displayPicture || '',
                 NameOfPoster: `${user.firstname ?? ''} ${user.lastname ?? ''}`.trim(),
-                Verified: user.Verified ?? false,
+                Verified: user.verified ?? false,
                 TimeOfPost: data.TimeOfPost ?? new Date().toISOString(),
                 Visibility: data.Visibility,
                 Caption: data.Caption ?? '',
@@ -350,7 +391,18 @@ io.on('connection', (socket) => {
             };
             blog.PostID = blog._id.toString();
             // console.log(data)
-        
+
+            let notificationActor: NotificationActor | null = null;
+            let mentionedActors: NotificationActor[] = [];
+            try {
+                notificationActor = await loadActor(inboxDb, userId);
+                if (notificationActor) {
+                    mentionedActors = await resolveMentionedUserIds(inboxDb, blog.Caption);
+                }
+            } catch (error) {
+                console.error('Error resolving notification recipients:', error);
+            }
+
             if(blog.Type === 'comment') {
                 if (!data.ParentId) {
                     return io.to(`user:${userId}`).emit("post_response", { 
@@ -401,6 +453,44 @@ io.on('connection', (socket) => {
                         type: blog.Type 
                     }
                 }, userId);
+
+                try {
+                    if (notificationActor) {
+                        const mentionedIds = new Set(mentionedActors.map((actor) => actor.id));
+                        const ownerId = post.UserId ? String(post.UserId) : '';
+
+                        if (ownerId && ownerId !== userId && !mentionedIds.has(ownerId)) {
+                            await recordNotification(inboxDb, {
+                                recipientId: ownerId,
+                                actorId: userId,
+                                actor: notificationActor,
+                                type: 'comment',
+                                targetType: PostsOrSharesOrComments === comments ? 'comment' : 'post',
+                                targetId: String(post.PostID),
+                                sourceId: blog.PostID,
+                                url: contentUrl(post),
+                                snippet: blog.Caption,
+                            });
+                        }
+
+                        for (const mention of mentionedActors) {
+                            if (mention.id === userId) continue;
+
+                            await recordNotification(inboxDb, {
+                                recipientId: mention.id,
+                                actorId: userId,
+                                actor: notificationActor,
+                                type: 'mention',
+                                targetType: 'comment',
+                                targetId: blog.PostID,
+                                url: contentUrl(blog),
+                                snippet: blog.Caption,
+                            });
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error writing comment notifications:', error);
+                }
             } else {
                 await posts.insertOne(blog)
                 
@@ -411,6 +501,27 @@ io.on('connection', (socket) => {
                         blog: blog 
                     }
                 }, userId);
+
+                try {
+                    if (notificationActor) {
+                        for (const mention of mentionedActors) {
+                            if (mention.id === userId) continue;
+
+                            await recordNotification(inboxDb, {
+                                recipientId: mention.id,
+                                actorId: userId,
+                                actor: notificationActor,
+                                type: 'mention',
+                                targetType: 'post',
+                                targetId: blog.PostID,
+                                url: contentUrl(blog),
+                                snippet: blog.Caption,
+                            });
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error writing post notifications:', error);
+                }
             }
         
             io.to(`user:${userId}`).emit("post_response", { 

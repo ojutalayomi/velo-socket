@@ -132,6 +132,36 @@ export type BlockedUser = {
   createdAt: string;
 }
 
+export type NotificationType = 'like' | 'comment' | 'follow' | 'mention';
+
+export type NotificationTarget = 'post' | 'comment' | 'chat_message' | 'user';
+
+export type NotificationActor = {
+  id: string;
+  name: string;
+  username: string;
+  displayPicture: string;
+  verified: boolean;
+};
+
+export type InAppNotification = {
+  _id?: ObjectId;
+  userId: string;
+  actorId: string;
+  actor: NotificationActor;
+  type: NotificationType;
+  targetType: NotificationTarget;
+  targetId: string;
+  groupKey: string;
+  dedupeKey: string;
+  url: string;
+  snippet?: string;
+  chatId?: string;
+  chatType?: string;
+  createdAt: Date;
+  readAt: Date | null;
+};
+
 export type FollowersSchema = {
   followerId: string,
   followedId: string,

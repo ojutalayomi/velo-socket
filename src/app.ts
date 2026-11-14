@@ -18,6 +18,7 @@ import { offlineMessageManager } from './offline-messages.js';
 import { redis as sharedRedis } from './redis.js';
 import chatHandler from './api/chat.js';
 import { MongoDBClient } from './mongodb.js';
+import { ensureInAppIndexes } from './notifications/inApp.js';
 
 app.use(cors(corsOptions));
 
@@ -40,6 +41,7 @@ async function ensureNotificationIndexes() {
       db.blockedUsers().createIndex({ blockedId: 1 }),
       db.userSettings().createIndex({ userId: 1 }, { unique: true }),
     ]);
+    await ensureInAppIndexes(db);
   } catch (error) {
     console.error('Failed to create notification indexes:', error);
   }

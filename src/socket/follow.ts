@@ -4,7 +4,14 @@ import { redis } from '../app.js';
 import { offlineMessageManager } from '../offline-messages.js';
 import { MongoDBClient } from '../mongodb.js';
 import { selectRecipients } from '../notifications/eligibility.js';
+import {
+    actorFromUser,
+    buildFollowDedupeKey,
+    recordNotification,
+    removeNotification,
+} from '../notifications/inApp.js';
 import { loadNotificationPreferences } from '../notifications/settings.js';
+import { profileUrl } from '../notifications/targets.js';
 import { filterOnlineUsers } from '../presence.js';
 import { deliverPush } from '../push.js';
 
@@ -49,10 +56,35 @@ io.on('connection', async (socket) => {
             const follower = ObjectId.isValid(followerId)
                 ? await db.users().findOne(
                     { _id: new ObjectId(followerId) },
-                    { projection: { username: 1, firstname: 1, lastname: 1 } }
+                    {
+                        projection: {
+                            username: 1,
+                            firstname: 1,
+                            lastname: 1,
+                            displayPicture: 1,
+                            verified: 1,
+                        },
+                    }
                 )
                 : null;
             const username = follower?.username || 'Someone';
+
+            try {
+                const followerActor = actorFromUser(follower, followerId);
+                if (followerActor) {
+                    await recordNotification(db, {
+                        recipientId: followedId,
+                        actorId: followerId,
+                        actor: followerActor,
+                        type: 'follow',
+                        targetType: 'user',
+                        targetId: followerId,
+                        url: profileUrl(username),
+                    });
+                }
+            } catch (error) {
+                console.error('Error writing follow notification:', error);
+            }
 
             const candidates = [followedId];
             const [preferences, onlineIds, blockedRows] = await Promise.all([
@@ -103,6 +135,7 @@ io.on('connection', async (socket) => {
     socket.on('unfollow', async (data: { followedDetails: any, followerDetails: any, time: string }, ack?: () => void) => {
         try {
             const { followedDetails, followerDetails, time } = data;
+            const followerId = socket.handshake.query.userId as string;
             const followedId = String(followedDetails._id);
 
             await offlineMessageManager.broadcastMessage({
@@ -113,7 +146,17 @@ io.on('connection', async (socket) => {
                     timestamp: time,
                     following: false,
                 }
-            }, undefined, [followedId, String(followerDetails._id)]);
+            }, undefined, [followedId, followerId || String(followerDetails._id)]);
+
+            if (followerId && followedId) {
+                try {
+                    const db = await new MongoDBClient().init();
+                    await removeNotification(db, buildFollowDedupeKey(followedId, followerId));
+                } catch (error) {
+                    console.error('Error removing follow notification:', error);
+                }
+            }
+
             ack?.();
         } catch (error) {
             console.error('Error handling unfollow event:', error);

@@ -1,7 +1,7 @@
 import { config } from 'dotenv';
 config()
 import { Db, MongoClient, ServerApiVersion } from 'mongodb';
-import { AttachmentSchema, BlockedUser, ChatData, ChatParticipant, ChatSettings, FollowersSchema, MessageSchema, PostBookmarkSchema, PostLikesSchema, PostSchema, Reaction, ReadReceipt, StatusSchema, StatusViewerSchema, TokensSchema, UserSchema, UserSettings, VideoSchema } from './types';
+import { AttachmentSchema, BlockedUser, ChatData, ChatParticipant, ChatSettings, FollowersSchema, InAppNotification, MessageSchema, PostBookmarkSchema, PostLikesSchema, PostSchema, Reaction, ReadReceipt, StatusSchema, StatusViewerSchema, TokensSchema, UserSchema, UserSettings, VideoSchema } from './types';
 
 const uri = process.env.MONGOLINK || '';
 
@@ -227,6 +227,14 @@ export class MongoDBClient {
    */
   blockedUsers() {
     return this.db.collection<BlockedUser>('Blocked_Users');
+  }
+
+  /**
+   * Gets the in-app notification inbox collection.
+   * @returns Collection for persisted notification events
+   */
+  notifications() {
+    return this.db.collection<InAppNotification>('Notifications');
   }
 
   /**

@@ -6,6 +6,8 @@ import { ChatMessage } from "./ChatMessage.js";
 import * as S3 from "../s3.js";
 import { MongoDBClient } from "../mongodb.js";
 import { notifyChatMessage } from "../notifications/chat.js";
+import { loadActor, recordNotification } from "../notifications/inApp.js";
+import { chatUrl } from "../notifications/targets.js";
 import { redis } from "../redis.js";
 
 export const chatSocketHandler = async (
@@ -271,6 +273,8 @@ export const chatSocketHandler = async (
             timestamp: message.timestamp,
           };
 
+          const mentionActor = await loadActor(db, senderId);
+
           for (const mention of data.mentions) {
             // Never notify the sender about their own mention
             if (mention.userId === senderId) continue;
@@ -283,6 +287,25 @@ export const chatSocketHandler = async (
               undefined,
               [mention.userId]
             );
+
+            if (mentionActor) {
+              try {
+                await recordNotification(db, {
+                  recipientId: mention.userId,
+                  actorId: senderId,
+                  actor: mentionActor,
+                  type: 'mention',
+                  targetType: 'chat_message',
+                  targetId: mentionNotification.messageId,
+                  url: chatUrl(data.chatId, data.chatType),
+                  snippet: data.content,
+                  chatId: data.chatId,
+                  chatType: data.chatType,
+                });
+              } catch (error) {
+                console.error('Error writing chat mention notification:', error);
+              }
+            }
           }
 
         } catch (error) {
