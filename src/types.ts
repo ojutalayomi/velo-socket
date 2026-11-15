@@ -272,7 +272,6 @@ export type ChatSettings = {
 
   // Specific to group chats
   isPrivate?: boolean;
-  inviteLink?: string;
   members?: string[]; // List of user IDs
   adminIds?: string[]; // List of admin user IDs
 
@@ -514,7 +513,6 @@ export type ChatData = {
   groupDisplayPicture: string;
   verified: boolean;
   adminIds: string[];
-  inviteLink: string;
   isPrivate: boolean;
   lastMessageId: string;
   timestamp: string;

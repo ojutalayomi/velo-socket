@@ -85,7 +85,11 @@ export const chatSocketHandler = async (
         attachments: attachmentsWithUrls || [],
         quotedMessageId: data.quotedMessageId,
         status: 'sent' as msgStatus,
-        messageType: data.messageType as MessageType
+        messageType: data.messageType as MessageType,
+        mentions: (data.mentions ?? []).map((mention) => ({
+          userId: String(mention.userId),
+          username: String(mention.username),
+        })),
       });
       
       // The roster always comes from the DB; a client must not be able to name its own recipients.
