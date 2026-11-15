@@ -1,10 +1,11 @@
 import { ObjectId } from "mongodb";
 import * as S3 from "../s3.js";
-import { AttachmentSchema, ChatParticipant, ConvoType1, MessageAttributes, MessageType, msgStatus, NewChat_, Reaction, UserSchema } from "../types.js";
+import { AttachmentSchema, ConvoType1, MessageAttributes, MessageType, msgStatus, NewChat_, Reaction, UserSchema } from "../types.js";
 import { MongoDBClient } from "../mongodb.js";
 import { io, UserSocket } from '../socket.js';
 import { offlineMessageManager } from '../offline-messages.js';
 import { chatSocketHandler } from "../lib/chatSocketHandler.js";
+import { isChatParticipant } from '../utils.js';
 
 io.on('connection', async (socket: UserSocket) => {
   try {
@@ -196,7 +197,7 @@ io.on('connection', async (socket: UserSocket) => {
       }
     });
 
-    socket.on('chatMessage', async (data: MessageAttributes & { participants?: ChatParticipant[] }) => {
+    socket.on('chatMessage', async (data: MessageAttributes) => {
       await chatSocketHandler(data, db, userId);
     });
 
@@ -216,15 +217,115 @@ io.on('connection', async (socket: UserSocket) => {
       }
     });
 
-    socket.on('joinChat', (data: { chatId: string }) => {
+    socket.on('joinChat', async (data: { chatId: string }) => {
       try {
         const { chatId } = data;
-        if (chatId) {
-          socket.join(`group:${chatId}`);
-          io.to(`group:${chatId}`).emit('groupAnnouncement', { chatId, userId: userId });
+        if (!chatId || !ObjectId.isValid(chatId)) return;
+        if (!(await isChatParticipant(chatId, userId))) {
+          console.warn(`joinChat rejected; ${userId} is not in chat ${chatId}`);
+          socket.emit('chatError', { error: 'You are not a member of this chat' });
+          return;
         }
+        socket.join(`group:${chatId}`);
+        io.to(`group:${chatId}`).emit('groupAnnouncement', { chatId, userId: userId });
       } catch (error) {
         console.error('Error in joinChat event:', error);
+      }
+    });
+
+    // Announced by the API after it inserts membership rows. Re-derive the roster
+    // from the DB so a forged payload cannot pull non-members into the room.
+    socket.on('chat:participantsAdded', async (data: { chatId: string, addedUserIds?: string[] }, ack?: () => void) => {
+      try {
+        const chatId = data?.chatId;
+        if (!chatId || !ObjectId.isValid(chatId)) {
+          ack?.();
+          return;
+        }
+
+        const chat = await db.chats().findOne({ _id: new ObjectId(chatId) });
+        if (!chat || chat.chatType !== 'Group') {
+          ack?.();
+          return;
+        }
+
+        const participants = await db.chatParticipants().find({ chatId }).toArray();
+        const memberIds = Array.from(new Set(participants.map(p => p.userId).filter(Boolean)));
+        if (memberIds.length === 0) {
+          ack?.();
+          return;
+        }
+
+        const addedIds = Array.from(new Set(data.addedUserIds ?? [])).filter(id => memberIds.includes(id));
+
+        io.in(memberIds.map(id => `user:${id}`)).socketsJoin(`group:${chatId}`);
+
+        const chatPayload = { ...chat, _id: chat._id.toString(), participants };
+
+        // Added members need the whole conversation; requestId must be the recipient.
+        for (const addedUserId of addedIds) {
+          await offlineMessageManager.broadcastMessage(
+            { type: 'newChat', data: { chat: chatPayload, requestId: addedUserId } },
+            undefined,
+            [addedUserId]
+          );
+        }
+
+        await offlineMessageManager.broadcastMessage(
+          { type: 'chatParticipantsUpdated', data: { chatId, participants, adminIds: chat.adminIds ?? [] } },
+          undefined,
+          memberIds
+        );
+
+        ack?.();
+      } catch (error) {
+        console.error('Error in chat:participantsAdded event:', error);
+        ack?.();
+      }
+    });
+
+    // Announced by the API after it deletes membership rows. Membership is re-read so a
+    // forged payload cannot evict someone who is still in the group.
+    socket.on('chat:participantsRemoved', async (data: { chatId: string, removedUserIds?: string[] }, ack?: () => void) => {
+      try {
+        const chatId = data?.chatId;
+        if (!chatId || !ObjectId.isValid(chatId)) {
+          ack?.();
+          return;
+        }
+
+        // The chat is gone when the last member left.
+        const chat = await db.chats().findOne({ _id: new ObjectId(chatId) });
+        const participants = chat ? await db.chatParticipants().find({ chatId }).toArray() : [];
+        const memberIds = Array.from(new Set(participants.map(p => p.userId).filter(Boolean)));
+        const removedIds = Array.from(new Set(data.removedUserIds ?? [])).filter(id => !memberIds.includes(id));
+        if (removedIds.length === 0) {
+          ack?.();
+          return;
+        }
+
+        io.in(removedIds.map(id => `user:${id}`)).socketsLeave(`group:${chatId}`);
+
+        for (const removedUserId of removedIds) {
+          await offlineMessageManager.broadcastMessage(
+            { type: 'chatRemoved', data: { chatId } },
+            undefined,
+            [removedUserId]
+          );
+        }
+
+        if (chat && memberIds.length > 0) {
+          await offlineMessageManager.broadcastMessage(
+            { type: 'chatParticipantsUpdated', data: { chatId, participants, adminIds: chat.adminIds ?? [] } },
+            undefined,
+            memberIds
+          );
+        }
+
+        ack?.();
+      } catch (error) {
+        console.error('Error in chat:participantsRemoved event:', error);
+        ack?.();
       }
     });
   } catch (error) {

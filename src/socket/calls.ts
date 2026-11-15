@@ -6,6 +6,7 @@ import { selectRecipients } from '../notifications/eligibility.js';
 import { loadNotificationPreferences } from '../notifications/settings.js';
 import { filterOnlineUsers } from '../presence.js';
 import { deliverPush, sendSilentClose } from '../push.js';
+import { isChatParticipant } from '../utils.js';
 
 const CALL_RING_TIMEOUT_MS = 30_000;
 
@@ -47,15 +48,6 @@ async function loadDisplayName(userId: string): Promise<string> {
     console.error('Error loading call display name:', error);
     return 'Someone';
   }
-}
-
-async function isDmParticipant(chatId: string, userId: string): Promise<boolean> {
-  const db = await new MongoDBClient().init();
-  const participant = await db.chatParticipants().findOne(
-    { chatId, userId },
-    { projection: { _id: 1 } }
-  );
-  return Boolean(participant);
 }
 
 /** Applies call preferences, block state, and the offline requirement. */
@@ -192,18 +184,14 @@ export const handleCallInvite = async (
 
   if (!callerId || !roomId) return;
 
-  if (chatType === 'DM') {
-    if (!targetUserId || targetUserId === callerId) return;
+  if (chatType === 'DM' && (!targetUserId || targetUserId === callerId)) return;
 
-    const [callerIsParticipant, calleeIsParticipant] = await Promise.all([
-      isDmParticipant(roomId, callerId),
-      isDmParticipant(roomId, targetUserId),
-    ]);
-    if (!callerIsParticipant || !calleeIsParticipant) {
-      console.warn(`call:invite rejected; ${callerId} or ${targetUserId} is not in chat ${roomId}`);
-      socket.emit('chatError', { error: 'You are not a participant of this chat' });
-      return;
-    }
+  const targets = chatType === 'DM' ? [callerId, targetUserId as string] : [callerId];
+  const membership = await Promise.all(targets.map((id) => isChatParticipant(roomId, id)));
+  if (membership.some((isMember) => !isMember)) {
+    console.warn(`call:invite rejected; ${targets.join(' or ')} is not in chat ${roomId}`);
+    socket.emit('chatError', { error: 'You are not a participant of this chat' });
+    return;
   }
 
   const callId = `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;

@@ -48,6 +48,17 @@ export const fetchUserGroup = async (userId: string) => {
   return db.chats().find({ _id: { $in: chatIds.map(id => new ObjectId(id)) } }).toArray();
 };
 
+/** Membership is the existence of a Chat_Participants row for (chatId, userId). */
+export const isChatParticipant = async (chatId: string, userId: string) => {
+  if (!chatId || !userId) return false;
+  const db = await new MongoDBClient().init();
+  const participant = await db.chatParticipants().findOne(
+    { chatId, userId },
+    { projection: { _id: 1 } }
+  );
+  return Boolean(participant);
+};
+
 export async function updateReadReceipts(userId: string, redis: Redis) {
   await redis.set(`user:${userId}:readReceipts`, new Date().toISOString());
 }

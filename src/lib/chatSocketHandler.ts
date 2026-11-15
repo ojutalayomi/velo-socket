@@ -1,7 +1,7 @@
 import { ObjectId } from "mongodb";
 import { offlineMessageManager } from "../offline-messages.js";
 import { io } from "../socket.js";
-import { MessageAttributes, ChatParticipant, AttachmentSchema, msgStatus, MessageType, MentionNotification } from "../types.js";
+import { MessageAttributes, AttachmentSchema, msgStatus, MessageType, MentionNotification } from "../types.js";
 import { ChatMessage } from "./ChatMessage.js";
 import * as S3 from "../s3.js";
 import { MongoDBClient } from "../mongodb.js";
@@ -11,7 +11,7 @@ import { chatUrl } from "../notifications/targets.js";
 import { redis } from "../redis.js";
 
 export const chatSocketHandler = async (
-    data: MessageAttributes & { participants?: ChatParticipant[] },
+    data: MessageAttributes,
     db: MongoDBClient,
     authenticatedSenderId?: string
 ) => {
@@ -25,6 +25,17 @@ export const chatSocketHandler = async (
       if (!data.chatId || !senderId || !data.receiverId) {
         console.error('chatMessage: Missing required fields', { chatId: data.chatId, senderId: senderId, receiverId: data.receiverId });
         io.to(`user:${senderId}`).emit('chatError', { error: 'Missing required fields' });
+        return;
+      }
+
+      // Reject non-members before any upload or write happens.
+      const senderMembership = await db.chatParticipants().findOne(
+        { chatId: data.chatId, userId: senderId },
+        { projection: { _id: 1 } }
+      );
+      if (!senderMembership) {
+        console.warn(`chatMessage rejected; ${senderId} is not in chat ${data.chatId}`);
+        io.to(`user:${senderId}`).emit('chatError', { error: 'You are not a member of this chat' });
         return;
       }
 
@@ -77,8 +88,8 @@ export const chatSocketHandler = async (
         messageType: data.messageType as MessageType
       });
       
-      // Assuming `message` is defined and contains the necessary properties
-      const chatsParticipants = data.participants || await db.chatParticipants().find({ chatId: message.chatId }).toArray();
+      // The roster always comes from the DB; a client must not be able to name its own recipients.
+      const chatsParticipants = await db.chatParticipants().find({ chatId: message.chatId }).toArray();
       
       // Validate participants data structure
       if (chatsParticipants && chatsParticipants.length > 0) {
