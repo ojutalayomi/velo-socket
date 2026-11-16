@@ -81,7 +81,7 @@ npm run dev
 
 The server uses the following environment variables:
 
-- `REDIS_URL` - Redis connection string
+- `REDIS_URL` - Complete Redis connection string (use `rediss://` for providers that require TLS)
 - `ALLOWED_URL` - CORS allowed origin
 - `ALLOWED_URL_1` - Additional CORS allowed origin
 
