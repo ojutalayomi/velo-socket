@@ -107,7 +107,7 @@ io.on('connection', async (socket) => {
                 preferences,
                 muted: new Set(),
                 online: new Set(onlineIds),
-                requireOffline: true,
+                requireOffline: false,
             });
 
             await deliverPush({
@@ -120,7 +120,7 @@ io.on('connection', async (socket) => {
                     url: `/${encodeURIComponent(username)}`,
                     tag: `follow:${followerId}`,
                 },
-                requireOffline: true,
+                requireOffline: false,
                 redis,
             });
 

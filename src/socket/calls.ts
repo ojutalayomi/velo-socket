@@ -79,7 +79,7 @@ async function callRecipients(call: ActiveCall): Promise<string[]> {
     preferences,
     muted: new Set(),
     online: new Set(onlineIds),
-    requireOffline: true,
+    requireOffline: false,
   });
 }
 
@@ -97,7 +97,7 @@ async function sendIncomingCallPush(call: ActiveCall): Promise<void> {
       url: '/chats',
       tag: `call:${call.callId}`,
     },
-    requireOffline: true,
+    requireOffline: false,
     redis,
   });
 }
@@ -129,7 +129,7 @@ async function sendMissedCallPush(call: ActiveCall): Promise<void> {
       url: '/chats',
       tag: `call:${call.callId}`,
     },
-    requireOffline: true,
+    requireOffline: false,
     redis,
   });
 }

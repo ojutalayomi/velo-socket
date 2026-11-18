@@ -121,7 +121,7 @@ export async function notifyChatMessage(params: ChatNotificationParams): Promise
         preferences,
         muted,
         online,
-        requireOffline: true,
+        requireOffline: false,
         now,
       })
     : [];
@@ -139,7 +139,7 @@ export async function notifyChatMessage(params: ChatNotificationParams): Promise
       sourceId: messageId,
       userIds: visible,
       payload: { ...mentionPayload, body: preview },
-      requireOffline: true,
+      requireOffline: false,
       redis,
     });
     await deliverPush({
@@ -147,7 +147,7 @@ export async function notifyChatMessage(params: ChatNotificationParams): Promise
       sourceId: messageId,
       userIds: hidden,
       payload: { ...mentionPayload, body: 'You were mentioned' },
-      requireOffline: true,
+      requireOffline: false,
       redis,
     });
   }
@@ -168,7 +168,7 @@ export async function notifyChatMessage(params: ChatNotificationParams): Promise
         preferences,
         muted,
         online,
-        requireOffline: true,
+        requireOffline: false,
         now,
       })
     : [];
@@ -187,7 +187,7 @@ export async function notifyChatMessage(params: ChatNotificationParams): Promise
     sourceId: messageId,
     userIds: visible,
     payload: { ...messagePayload, body: preview },
-    requireOffline: true,
+    requireOffline: false,
     redis,
   });
   await deliverPush({
@@ -195,7 +195,7 @@ export async function notifyChatMessage(params: ChatNotificationParams): Promise
     sourceId: messageId,
     userIds: hidden,
     payload: { ...messagePayload, body: 'New message' },
-    requireOffline: true,
+    requireOffline: false,
     redis,
   });
 }

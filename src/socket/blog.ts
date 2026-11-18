@@ -76,7 +76,7 @@ async function sendMentionPushNotification(params: MentionPushParams): Promise<v
                 url: `/notifications`,
                 tag: `mention:${postId}`,
             },
-            requireOffline: true,
+            requireOffline: false,
             redis,
         });
     } catch (error) {
@@ -124,7 +124,7 @@ async function sendSharePushNotification(params: SharePushParams): Promise<void>
                 url: `/notifications`,
                 tag: `share:${postId}`,
             },
-            requireOffline: true,
+            requireOffline: false,
             redis,
         });
     } catch (error) {
