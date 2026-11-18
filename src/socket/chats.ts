@@ -32,17 +32,64 @@ io.on('connection', async (socket: UserSocket) => {
       socket.leave(chatId);
     });
 
-    socket.on('addChat', async (data: NewChat_) => {
-      // console.log(data.chat.participants)
-      if (data.chat && data.chat.participants && data.chat.participants.length > 0) {
-        const participantUserIds = Array.from(new Set(data.chat.participants.map(participant => participant.userId)));
+    // Announced by the API after it creates a chat. Everything is re-read from the DB so a
+    // forged payload cannot push a made-up conversation to other users, and each recipient
+    // receives the chat from their own point of view (DM name and picture are the sender's).
+    socket.on('addChat', async (data: Pick<NewChat_, 'chat'>, ack?: () => void) => {
+      try {
+        const chatId = data?.chat?._id?.toString();
+        if (!chatId || !ObjectId.isValid(chatId)) {
+          ack?.();
+          return;
+        }
 
-        await offlineMessageManager.broadcastMessage({
-          type: 'newChat',
-          data
-        }, userId, participantUserIds);
-      } else {
-        console.warn('addChat: No participants found in chat data');
+        const chat = await db.chats().findOne({ _id: new ObjectId(chatId) });
+        if (!chat) {
+          ack?.();
+          return;
+        }
+
+        const participants = await db.chatParticipants().find({ chatId }).toArray();
+        if (!participants.some(participant => participant.userId === userId)) {
+          console.warn(`addChat rejected; ${userId} is not in chat ${chatId}`);
+          ack?.();
+          return;
+        }
+
+        const memberIds = Array.from(new Set(participants.map(participant => participant.userId).filter(Boolean)));
+        const recipientIds = memberIds.filter(id => id !== userId);
+
+        let sender: Pick<UserSchema, 'name' | 'displayPicture'> | null = null;
+        if (chat.chatType === 'DM' && ObjectId.isValid(userId)) {
+          sender = await db.users().findOne(
+            { _id: new ObjectId(userId) },
+            { projection: { name: 1, displayPicture: 1 } }
+          );
+        }
+
+        for (const recipientId of recipientIds) {
+          const recipientChat = {
+            ...chat,
+            _id: chat._id.toString(),
+            participants: participants.map(participant =>
+              chat.chatType === 'DM' && participant.userId === userId
+                ? { ...participant, displayPicture: sender?.displayPicture ?? participant.displayPicture ?? '' }
+                : participant
+            ),
+            ...(chat.chatType === 'DM' ? { name: { [userId]: sender?.name ?? '' } } : {}),
+          };
+
+          await offlineMessageManager.broadcastMessage(
+            { type: 'newChat', data: { chat: recipientChat, requestId: recipientId } },
+            userId,
+            [recipientId]
+          );
+        }
+
+        ack?.();
+      } catch (error) {
+        console.error('Error in addChat event:', error);
+        ack?.();
       }
     });
 
@@ -197,8 +244,12 @@ io.on('connection', async (socket: UserSocket) => {
       }
     });
 
-    socket.on('chatMessage', async (data: MessageAttributes) => {
-      await chatSocketHandler(data, db, userId);
+    socket.on('chatMessage', async (data: MessageAttributes, ack?: () => void) => {
+      try {
+        await chatSocketHandler(data, db, userId);
+      } finally {
+        ack?.();
+      }
     });
 
     socket.on('typing', (data: { user: Partial<UserSchema>, to: string }) => {
