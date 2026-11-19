@@ -244,6 +244,62 @@ io.on('connection', async (socket: UserSocket) => {
       }
     });
 
+    // The user has opened the chat: record real read receipts for everything still pending,
+    // then tell each message's sender so their ticks can turn blue.
+    socket.on('markRead', async (data: { chatId?: string }, ack?: () => void) => {
+      try {
+        const chatId = data?.chatId;
+        if (!chatId || !ObjectId.isValid(chatId) || !(await isChatParticipant(chatId, userId))) {
+          ack?.();
+          return;
+        }
+
+        // Readers who switched receipts off leave theirs pending, so nobody can see they read.
+        const settings = await db.userSettings().findOne({ userId }, { projection: { showReadReceipts: 1 } });
+        if (settings?.showReadReceipts === false) {
+          ack?.();
+          return;
+        }
+
+        const pending = await db.readReceipts().find(
+          { chatId, userId, readAt: null },
+          { projection: { messageId: 1 } }
+        ).toArray();
+        const messageIds = pending.map(receipt => receipt.messageId);
+        if (messageIds.length === 0) {
+          ack?.();
+          return;
+        }
+
+        // Filter by the ids read above so a message that arrives meanwhile stays pending.
+        const readAt = new Date().toISOString();
+        await db.readReceipts().updateMany(
+          { chatId, userId, messageId: { $in: messageIds }, readAt: null },
+          { $set: { readAt } }
+        );
+
+        const objectIds = messageIds.filter(id => ObjectId.isValid(id)).map(id => new ObjectId(id));
+        const messages = await db.chatMessages()
+          .find({ _id: { $in: objectIds } }, { projection: { 'sender.id': 1 } })
+          .toArray();
+        const byUser = new Map<string, string[]>();
+        for (const message of messages) {
+          const senderId = message.sender?.id;
+          if (!senderId || senderId === userId) continue;
+          byUser.set(senderId, [...(byUser.get(senderId) ?? []), message._id.toString()]);
+        }
+
+        // Live only: offline senders pick receipts up from the API the next time they load.
+        for (const [senderId, ids] of byUser) {
+          io.to(`user:${senderId}`).emit('messagesRead', { chatId, readerId: userId, messageIds: ids, readAt });
+        }
+        ack?.();
+      } catch (error) {
+        console.error('Error in markRead event:', error);
+        ack?.();
+      }
+    });
+
     socket.on('chatMessage', async (data: MessageAttributes, ack?: () => void) => {
       try {
         await chatSocketHandler(data, db, userId);

@@ -274,7 +274,8 @@ export const chatSocketHandler = async (
               messageId: message?._id?.toString() || '',
               userId: participant.userId,
               chatId: message.chatId.toString(),
-              readAt: new Date().toISOString()
+              // Only the sender has read their own message; everyone else is pending until markRead.
+              readAt: participant.userId === senderId ? new Date().toISOString() : null
             }))
           );
         } catch (error) {
