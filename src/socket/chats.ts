@@ -6,6 +6,7 @@ import { io, UserSocket } from '../socket.js';
 import { offlineMessageManager } from '../offline-messages.js';
 import { chatSocketHandler } from "../lib/chatSocketHandler.js";
 import { isChatParticipant } from '../utils.js';
+import { canDeleteChat, canDeleteMessage, parseParticipantUpdates } from '../lib/conversationUpdates.js';
 
 io.on('connection', async (socket: UserSocket) => {
   try {
@@ -157,21 +158,23 @@ io.on('connection', async (socket: UserSocket) => {
       }
     });
 
-    socket.on('updateConversation', async (data: {id: string, updates: Partial<ConvoType1>}) => {
+    // Every write here is scoped to the authenticated socket user (`userId`); the client's own
+    // claim about who it is (`updates.userId`) is never used.
+    socket.on('updateConversation', async (data: { id: string; updates: Record<string, unknown> }) => {
+      const { id, updates } = data ?? {};
       try {
-        const { id, updates } = data;
-        // console.log(data)
+        if (!id || !ObjectId.isValid(id) || !updates || typeof updates !== 'object') {
+          socket.emit('chatError', { error: 'Invalid update' });
+          return;
+        }
 
-        // Delete message
-        if (data.updates.deleted) {
-          // Delete chat
-          if (data.updates.convo) {
+        if (updates.deleted) {
+          if (updates.convo) {
+            // Delete a whole chat
             const chatId = new ObjectId(id);
             const chat = await db.chats().findOne({ _id: chatId });
 
             if (!chat) {
-              // console.log('Chat not found:', id);
-              // Emit an error event to the client
               io.to(`user:${userId}`).emit('chatError', {
                 error: 'Chat not found',
                 chatId: id,
@@ -180,35 +183,55 @@ io.on('connection', async (socket: UserSocket) => {
               return;
             }
 
-            // Proceed with deletion only if chat exists
-            const result = await db.chats().deleteOne({ _id: chatId });
-            const result1 = await db.chatMessages().deleteMany({ chatId: chatId.toString() });
-            const messages = await db.chatMessages().find({ chatId: chatId.toString() }).toArray();
-            // console.log(result,result1,messages)
+            if (!canDeleteChat({
+              chatType: chat.chatType,
+              adminIds: chat.adminIds,
+              userId,
+              isMember: await isChatParticipant(id, userId),
+            })) {
+              // chatId + updates let the client restore the conversation it hid optimistically.
+              io.to(`user:${userId}`).emit('chatError', {
+                error: chat.chatType === 'Group' ? 'Only group admins can delete this group' : 'You are not a member of this chat',
+                chatId: id,
+                updates: updates
+              });
+              return;
+            }
 
-            // Delete attachments from S3 if they exist
-            if (messages && messages.length > 0) {
-              for (const message of messages) {
-                if (message.attachments && message.attachments.length > 0) {
-                  try {
-                    await S3.deleteFileFromS3('files-for-chat', message.attachments);
-                  } catch (error) {
-                    console.error('Error deleting attachment from S3:', error);
-                  }
-                }
+            // Collect attachment keys first: once the messages are deleted there is nothing left to read.
+            const messages = await db.chatMessages()
+              .find({ chatId: chatId.toString() }, { projection: { attachments: 1 } })
+              .toArray();
+            const attachmentKeys = messages.flatMap(message => message.attachments ?? []);
+
+            await db.chats().deleteOne({ _id: chatId });
+            await db.chatMessages().deleteMany({ chatId: chatId.toString() });
+
+            // Best effort: the chat is already gone, so a storage failure must not undo that.
+            if (attachmentKeys.length > 0) {
+              try {
+                await S3.deleteFileFromS3('files-for-chat', attachmentKeys);
+              } catch (error) {
+                console.error('Error deleting attachment from S3:', error);
               }
+              await db.files().deleteMany({ key: { $in: attachmentKeys } });
             }
 
             const result2 = await db.chatParticipants().deleteMany({ chatId: chatId.toString() })
             // console.log(result2)
             const result3 = await db.readReceipts().deleteMany({ chatId: chatId.toString() })
             // console.log(result3)
-            // console.log(`Deleted ${result.deletedCount + result1.deletedCount} message(s)`); // Log the result of the deletion
             return;
           } else {
+            // Delete one message for everyone: only its sender may do this
             const messageId = new ObjectId(id);
             const message = await db.chatMessages().findOne({ _id: messageId });
-            if (message && message.attachments && message.attachments.length > 0) {
+            if (!message) return;
+            if (!canDeleteMessage({ senderId: message.sender?.id, userId })) {
+              socket.emit('chatError', { error: 'You can only delete your own messages' });
+              return;
+            }
+            if (message.attachments && message.attachments.length > 0) {
               try {
                 await S3.deleteFileFromS3('files-for-chat', message.attachments);
               } catch (error) {
@@ -217,27 +240,22 @@ io.on('connection', async (socket: UserSocket) => {
             }
             await db.chatMessages().deleteOne({ _id: messageId })
             await db.readReceipts().deleteMany({ messageId: messageId.toString() })
-            // console.log(`Deleted ${result.deletedCount} message(s)`); // Log the result of the deletion
+            if (message.attachments && message.attachments.length > 0) {
+              await db.files().deleteMany({ key: { $in: message.attachments } });
+            }
             return;
           }
         }
 
-        const updateFields = Object.keys(updates).map((key) => {
-          return key;
-        });
-        const update = {
-          $set: updateFields.reduce((acc, field, index) => {
-            acc[field] = updates[Object.keys(updates)[index] as keyof typeof updates];
-            return acc;
-          }, {} as Record<string, any>),
-        };
+        // Per-user conversation state (pin, archive, unread...) on the caller's own row only.
+        const changes = parseParticipantUpdates(updates);
+        if (!changes) {
+          socket.emit('chatError', { error: 'Invalid update' });
+          return;
+        }
 
-        const result = await db.chatParticipants().updateOne(
-          { chatId: id, userId: updates.userId },
-          update
-        );
-        // console.log(`Changed prop is ${result}`)
-        io.to(`user:${updates.userId}`).emit('conversationUpdated', { id: id, updates });
+        await db.chatParticipants().updateOne({ chatId: id, userId }, { $set: changes });
+        io.to(`user:${userId}`).emit('conversationUpdated', { id: id, updates: { ...changes, userId } });
       } catch (error) {
         console.error('Error in updateConversation:', error);
         socket.emit('chatError', { error: 'Failed to update conversation' });
