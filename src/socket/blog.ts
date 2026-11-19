@@ -301,19 +301,24 @@ io.on('connection', (socket) => {
             if (!user) {
                 return io.to(`user:${userId}`).emit("post_reaction_response", { message: `You're not allowed to ${data.type} this post!`, success: false, postId: data.post.PostID, reaction: data.type });
             }
+            // Quotes reference the target via OriginalPostId; repost/unshare send the target post itself.
+            const targetPostId = data.action === 'share' && data.type === 'quote'
+                ? data.post.OriginalPostId
+                : data.post.PostID;
+
             // Check if the post exists in the posts collection
-            let post = await posts.findOne({ PostID: data.post.OriginalPostId });
+            let post = await posts.findOne({ PostID: targetPostId });
             PostsOrSharesOrComments = posts;
             
             // If not found, check in the shares collection
             if (!post) {
-                post = await shares.findOne({ PostId: data.post.OriginalPostId });
+                post = await shares.findOne({ PostID: targetPostId });
                 PostsOrSharesOrComments = shares;
             } 
             
             if (!post) {
                 // Check if the post is a comment
-                post = await comments.findOne({ PostID: data.post.OriginalPostId });
+                post = await comments.findOne({ PostID: targetPostId });
                 PostsOrSharesOrComments = comments;
             }
 
@@ -324,7 +329,7 @@ io.on('connection', (socket) => {
             if (!data.action) return io.to(`user:${userId}`).emit("post_reaction_response", { message: "This is an invalid reaction!", success: false, postId: data.post.PostID, reaction: data.action });
 
             // Check if the user has already reposted
-            const existingRepost = await shares.findOne({ OriginalPostId: data.post.PostID, userId: userId, Type: "repost" });
+            const existingRepost = await shares.findOne({ OriginalPostId: targetPostId, UserId: userId, Type: "repost" });
             
             if(data.action === 'unshare'){
                 if (!existingRepost) {
@@ -335,7 +340,7 @@ io.on('connection', (socket) => {
                         reaction: data.action,
                     });
                 }
-                await shares.deleteOne({ OriginalPostId: data.post.PostID, userId: userId, Type: "repost" })
+                await shares.deleteOne({ OriginalPostId: targetPostId, UserId: userId, Type: "repost" })
 
                 await PostsOrSharesOrComments.updateOne(
                     { PostID: data.post.PostID }, 
@@ -378,16 +383,16 @@ io.on('connection', (socket) => {
 
                     await shares.insertOne(repost as PostSchema);
                     await PostsOrSharesOrComments.updateOne(
-                        { PostID: data.post.PostID },
+                        { PostID: targetPostId },
                         { $inc: { NoOfShares: 1 } }
                     );
             
                     await offlineMessageManager.broadcastMessage({
                         type: 'updatePost',
                         data: { 
-                            postId: data.post.PostID, 
+                            postId: targetPostId,
                             update: {
-                                NoOfShares: data.action === 'share' ? post.NoOfShares + 1 : post.NoOfShares - 1
+                                NoOfShares: (post.NoOfShares ?? 0) + 1
                             },
                             type: data.action 
                         }
@@ -463,16 +468,16 @@ io.on('connection', (socket) => {
         
                     await shares.insertOne(quote);
                     await PostsOrSharesOrComments.updateOne(
-                        { PostID: data.post.OriginalPostId },
+                        { PostID: targetPostId },
                         { $inc: { NoOfShares: 1 } }
                     );
             
                     await offlineMessageManager.broadcastMessage({
                         type: 'updatePost',
                         data: { 
-                            postId: data.post.OriginalPostId, 
+                            postId: targetPostId,
                             update: {
-                                NoOfShares: data.action === 'share' ? post.NoOfShares + 1 : post.NoOfShares - 1
+                                NoOfShares: (post.NoOfShares ?? 0) + 1
                             },
                             type: data.action 
                         }
