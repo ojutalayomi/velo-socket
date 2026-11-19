@@ -17,6 +17,8 @@ export interface ChatNotificationParams {
   content: string;
   attachmentCount: number;
   mentions?: { userId?: string }[];
+  /** An accepted `@all`: every non-muted member is treated as mentioned. */
+  everyone?: boolean;
 }
 
 function formatSenderName(user: {
@@ -104,11 +106,13 @@ export async function notifyChatMessage(params: ChatNotificationParams): Promise
   const preview = messagePreview(params.content, params.attachmentCount);
 
   const mentionCandidates = Array.from(
-    new Set(
-      (params.mentions ?? [])
+    new Set([
+      ...(params.mentions ?? [])
         .map((mention) => (typeof mention?.userId === 'string' ? mention.userId : ''))
-        .filter((userId) => userId && userId !== senderId && participantIds.has(userId))
-    )
+        .filter((userId) => userId && userId !== senderId && participantIds.has(userId)),
+      // Muted members are not pulled in by @all; they fall through to the normal (muted) path.
+      ...(params.everyone ? candidateIds.filter((userId) => !muted.has(userId)) : []),
+    ])
   );
 
   const mentionRecipients = mentionCandidates.length

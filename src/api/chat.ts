@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import type { RequestHandler } from 'express';
-import OpenAI from 'openai';
 import { MessageAttributes, UserSchema } from '../types.js';
 import { ChatMessage } from '../lib/ChatMessage.js';
 import { chatSocketHandler } from '../lib/chatSocketHandler.js';
@@ -8,17 +7,9 @@ import { MongoDBClient } from '../mongodb.js';
 import { io } from '../socket.js';
 import { ObjectId } from 'mongodb';
 import { SocialMediaUser } from '../lib/User.js';
+import { aiModel, openRouter } from '../lib/openRouter.js';
 
 const router = Router();
-
-const openRouter = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY || '',
-  baseURL: 'https://openrouter.ai/api/v1',
-  defaultHeaders: {
-    ...(process.env.OPENROUTER_SITE_URL ? { 'HTTP-Referer': process.env.OPENROUTER_SITE_URL } : {}),
-    ...(process.env.OPENROUTER_APP_NAME ? { 'X-Title': process.env.OPENROUTER_APP_NAME } : {}),
-  },
-});
 
 const toOpenRouterMessage = (message: MessageAttributes, humanUserId: string) => {
   const role = message.sender.id === humanUserId ? 'user' : 'assistant';
@@ -68,7 +59,7 @@ const chatHandler: RequestHandler = async (req, res) => {
 
     const lastUserMessage = messages[messages.length - 1];
     const result = await openRouter.chat.completions.create({
-        model: process.env.OPENROUTER_MODEL || process.env.GEMINI_MODEL || 'openai/gpt-4o-mini',
+        model: aiModel(),
         messages: messages.map((message) => toOpenRouterMessage(message, lastUserMessage.sender.id)) as any,
         max_tokens: 5000,
         stop: [

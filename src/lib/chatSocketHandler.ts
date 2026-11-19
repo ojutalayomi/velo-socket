@@ -9,11 +9,20 @@ import { notifyChatMessage } from "../notifications/chat.js";
 import { loadActor, recordNotification } from "../notifications/inApp.js";
 import { chatUrl } from "../notifications/targets.js";
 import { redis } from "../redis.js";
+import {
+  canMentionEveryone,
+  everyoneRecipients,
+  mentionsAi,
+  mentionsEveryone,
+  sanitizeMentions,
+} from "../notifications/groupMentions.js";
+import { replyAsAi } from "./groupAi.js";
 
 export const chatSocketHandler = async (
     data: MessageAttributes,
     db: MongoDBClient,
-    authenticatedSenderId?: string
+    authenticatedSenderId?: string,
+    options: { trustedSender?: boolean } = {}
 ) => {
     const senderId = authenticatedSenderId || data.sender?.id;
     try {
@@ -29,7 +38,8 @@ export const chatSocketHandler = async (
       }
 
       // Reject non-members before any upload or write happens.
-      const senderMembership = await db.chatParticipants().findOne(
+      // Internal senders (the AI bot) post into groups without being members.
+      const senderMembership = options.trustedSender || await db.chatParticipants().findOne(
         { chatId: data.chatId, userId: senderId },
         { projection: { _id: 1 } }
       );
@@ -71,6 +81,17 @@ export const chatSocketHandler = async (
         }
       }
 
+      // `@all` is decided here from the stored group, never from what the client claims.
+      let everyoneAllowed = false;
+      if (!options.trustedSender && data.chatType === 'Group' && mentionsEveryone(data.content) && ObjectId.isValid(data.chatId)) {
+        const group = await db.chats().findOne(
+          { _id: new ObjectId(data.chatId) },
+          { projection: { chatType: 1, adminIds: 1 } }
+        );
+        everyoneAllowed = canMentionEveryone({ chatType: group?.chatType, adminIds: group?.adminIds, senderId });
+      }
+      const mentions = sanitizeMentions(data.mentions, everyoneAllowed);
+
       // Messages Collection
 
       const message = new ChatMessage({
@@ -86,7 +107,7 @@ export const chatSocketHandler = async (
         quotedMessageId: data.quotedMessageId,
         status: 'sent' as msgStatus,
         messageType: data.messageType as MessageType,
-        mentions: (data.mentions ?? []).map((mention) => ({
+        mentions: mentions.map((mention) => ({
           userId: String(mention.userId),
           username: String(mention.username),
         })),
@@ -265,8 +286,9 @@ export const chatSocketHandler = async (
         message.isRead = { [senderId]: true };
       }
 
-      // Process mentions and notify mentioned users
-      if (data.mentions && data.mentions.length > 0) {
+      // Process mentions and notify mentioned users (explicit @username plus an accepted @all)
+      const everyoneIds = everyoneAllowed ? everyoneRecipients(chatsParticipants, senderId) : [];
+      if (mentions.length > 0 || everyoneIds.length > 0) {
         try {
           // Build the set of valid participant user IDs for this chat (used for group validation)
           let participantUserIds: Set<string> | null = null;
@@ -290,23 +312,28 @@ export const chatSocketHandler = async (
 
           const mentionActor = await loadActor(db, senderId);
 
-          for (const mention of data.mentions) {
+          const targets = new Set<string>(everyoneIds);
+          for (const mention of mentions) {
             // Never notify the sender about their own mention
             if (mention.userId === senderId) continue;
 
-            // For group/channel chats, skip users who aren't participants
+            // For group/channel chats, skip users who aren't participants (this also drops the `all` marker)
             if (participantUserIds && !participantUserIds.has(mention.userId)) continue;
 
+            targets.add(mention.userId);
+          }
+
+          for (const recipientId of targets) {
             await offlineMessageManager.broadcastMessage(
               { type: 'mentionNotification', data: mentionNotification },
               undefined,
-              [mention.userId]
+              [recipientId]
             );
 
             if (mentionActor) {
               try {
                 await recordNotification(db, {
-                  recipientId: mention.userId,
+                  recipientId,
                   actorId: senderId,
                   actor: mentionActor,
                   type: 'mention',
@@ -363,10 +390,23 @@ export const chatSocketHandler = async (
           messageId: message._id?.toString() || '',
           content: data.content,
           attachmentCount: attachmentsWithUrls.length,
-          mentions: data.mentions,
+          mentions,
+          everyone: everyoneAllowed,
         });
       } catch (error) {
         console.error('Error sending chat push notifications:', error);
+      }
+
+      // `@ai` in a group asks the assistant to reply. Not awaited: the model call is slow and
+      // must not delay delivery. Bot replies are trusted senders and never re-trigger this.
+      if (!options.trustedSender && data.chatType === 'Group' && mentionsAi(data.content)) {
+        void replyAsAi({
+          db,
+          redis,
+          chatId: data.chatId,
+          trigger: message.toMessageAttributes(attachmentsWithUrls),
+          deliver: (reply, botId) => chatSocketHandler(reply, db, botId, { trustedSender: true }),
+        }).catch((error) => console.error('Error replying as AI:', error));
       }
     } catch (error) {
       console.error('Error in chatMessage handler:', error);
