@@ -160,11 +160,15 @@ io.on('connection', async (socket: UserSocket) => {
 
     // Every write here is scoped to the authenticated socket user (`userId`); the client's own
     // claim about who it is (`updates.userId`) is never used.
-    socket.on('updateConversation', async (data: { id: string; updates: Record<string, unknown> }) => {
+    socket.on('updateConversation', async (
+      data: { id: string; updates: Record<string, unknown> },
+      ack?: (result: { ok: boolean; error?: string }) => void
+    ) => {
       const { id, updates } = data ?? {};
       try {
         if (!id || !ObjectId.isValid(id) || !updates || typeof updates !== 'object') {
           socket.emit('chatError', { error: 'Invalid update' });
+          ack?.({ ok: false, error: 'Invalid update' });
           return;
         }
 
@@ -180,6 +184,7 @@ io.on('connection', async (socket: UserSocket) => {
                 chatId: id,
                 updates: updates
               });
+              ack?.({ ok: false, error: 'Chat not found' });
               return;
             }
 
@@ -190,13 +195,17 @@ io.on('connection', async (socket: UserSocket) => {
               isMember: await isChatParticipant(id, userId),
             })) {
               // chatId + updates let the client restore the conversation it hid optimistically.
-              io.to(`user:${userId}`).emit('chatError', {
-                error: chat.chatType === 'Group' ? 'Only group admins can delete this group' : 'You are not a member of this chat',
-                chatId: id,
-                updates: updates
-              });
+              const error = chat.chatType === 'Group' ? 'Only group admins can delete this group' : 'You are not a member of this chat';
+              io.to(`user:${userId}`).emit('chatError', { error, chatId: id, updates: updates });
+              ack?.({ ok: false, error });
               return;
             }
+
+            // Remember who was in the chat: the rows are deleted below, and they all need telling.
+            const memberRows = await db.chatParticipants()
+              .find({ chatId: chatId.toString() }, { projection: { userId: 1 } })
+              .toArray();
+            const memberIds = Array.from(new Set(memberRows.map(row => row.userId).filter(Boolean)));
 
             // Collect attachment keys first: once the messages are deleted there is nothing left to read.
             const messages = await db.chatMessages()
@@ -221,6 +230,18 @@ io.on('connection', async (socket: UserSocket) => {
             // console.log(result2)
             const result3 = await db.readReceipts().deleteMany({ chatId: chatId.toString() })
             // console.log(result3)
+
+            // Everyone else's copy of the chat is now dead; remove it from their screens too.
+            try {
+              await offlineMessageManager.broadcastMessage(
+                { type: 'chatRemoved', data: { chatId: chatId.toString() } },
+                undefined,
+                memberIds
+              );
+            } catch (error) {
+              console.error('Error announcing the deleted chat:', error);
+            }
+            ack?.({ ok: true });
             return;
           } else {
             // Delete one message for everyone: only its sender may do this
@@ -319,11 +340,10 @@ io.on('connection', async (socket: UserSocket) => {
     });
 
     socket.on('chatMessage', async (data: MessageAttributes, ack?: () => void) => {
-      try {
-        await chatSocketHandler(data, db, userId);
-      } finally {
-        ack?.();
-      }
+      // Acknowledge receipt right away. Processing (uploads, fan-out, push) can take seconds and
+      // keeps running after the caller disconnects; failures reach the sender as 'chatError'.
+      ack?.();
+      await chatSocketHandler(data, db, userId);
     });
 
     socket.on('typing', (data: { user: Partial<UserSchema>, to: string }) => {

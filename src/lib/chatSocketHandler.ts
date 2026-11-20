@@ -50,6 +50,15 @@ export const chatSocketHandler = async (
         return;
       }
 
+      // A retry of a message that was already saved (same id) must not repeat any side effects.
+      if (typeof data._id === 'string' && ObjectId.isValid(data._id)) {
+        const saved = await db.chatMessages().findOne({ _id: new ObjectId(data._id) }, { projection: { _id: 1 } });
+        if (saved) {
+          console.warn(`chatMessage ${data._id} already saved; ignoring duplicate`);
+          return;
+        }
+      }
+
       // Announcement mode is read from the stored chat, never from the client's chatType.
       const group = !options.trustedSender && ObjectId.isValid(data.chatId)
         ? await db.chats().findOne(
@@ -257,6 +266,11 @@ export const chatSocketHandler = async (
       try {
         await db.chatMessages().insertOne(message);
       } catch (error) {
+        // The same message id arriving twice is a retry of one already saved; do nothing.
+        if ((error as { code?: number })?.code === 11000) {
+          console.warn(`chatMessage ${message._id} already saved; ignoring duplicate`);
+          return;
+        }
         console.error('Error inserting chat message:', error);
         io.to(`user:${senderId}`).emit('chatError', { error: 'Failed to save message' });
         return;
@@ -387,7 +401,9 @@ export const chatSocketHandler = async (
         try {
           // Live emit to sender and receiver
           // Queue for offline sender/receiver
-          const targets = Array.from(new Set([senderId, data.receiverId]));
+          // Recipients come from the stored roster, like groups; the client's receiverId is not trusted.
+          const rosterIds = (chatsParticipants ?? []).map(participant => participant.userId);
+          const targets = rosterIds.length > 0 ? Array.from(new Set([senderId, ...rosterIds])) : [senderId];
           await offlineMessageManager.broadcastMessage({
             type: 'newMessage',
             data: message.toMessageAttributes(attachmentsWithUrls)
