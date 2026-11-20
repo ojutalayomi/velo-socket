@@ -671,6 +671,9 @@ io.on('connection', (socket) => {
                     }
                 }, userId);
 
+                // broadcastMessage skips the author, so send them their own comment too.
+                io.to(`user:${userId}`).emit('newComment', { excludeUser: userId, blog });
+
                 await offlineMessageManager.broadcastMessage({
                     type: 'updatePost',
                     data: { 
