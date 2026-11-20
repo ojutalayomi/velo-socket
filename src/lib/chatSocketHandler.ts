@@ -17,6 +17,7 @@ import {
   sanitizeMentions,
 } from "../notifications/groupMentions.js";
 import { replyAsAi } from "./groupAi.js";
+import { canSendMessage } from "./chatPermissions.js";
 
 export const chatSocketHandler = async (
     data: MessageAttributes,
@@ -46,6 +47,23 @@ export const chatSocketHandler = async (
       if (!senderMembership) {
         console.warn(`chatMessage rejected; ${senderId} is not in chat ${data.chatId}`);
         io.to(`user:${senderId}`).emit('chatError', { error: 'You are not a member of this chat' });
+        return;
+      }
+
+      // Announcement mode is read from the stored chat, never from the client's chatType.
+      const group = !options.trustedSender && ObjectId.isValid(data.chatId)
+        ? await db.chats().findOne(
+            { _id: new ObjectId(data.chatId) },
+            { projection: { chatType: 1, adminIds: 1, onlyAdminsCanSend: 1 } }
+          )
+        : null;
+      if (group && !canSendMessage({
+        chatType: group.chatType,
+        onlyAdminsCanSend: group.onlyAdminsCanSend,
+        adminIds: group.adminIds,
+        userId: senderId,
+      })) {
+        io.to(`user:${senderId}`).emit('chatError', { error: 'Only admins can send messages in this group' });
         return;
       }
 
@@ -82,14 +100,11 @@ export const chatSocketHandler = async (
       }
 
       // `@all` is decided here from the stored group, never from what the client claims.
-      let everyoneAllowed = false;
-      if (!options.trustedSender && data.chatType === 'Group' && mentionsEveryone(data.content) && ObjectId.isValid(data.chatId)) {
-        const group = await db.chats().findOne(
-          { _id: new ObjectId(data.chatId) },
-          { projection: { chatType: 1, adminIds: 1 } }
-        );
-        everyoneAllowed = canMentionEveryone({ chatType: group?.chatType, adminIds: group?.adminIds, senderId });
-      }
+      const everyoneAllowed = !options.trustedSender && mentionsEveryone(data.content) && canMentionEveryone({
+        chatType: group?.chatType,
+        adminIds: group?.adminIds,
+        senderId,
+      });
       const mentions = sanitizeMentions(data.mentions, everyoneAllowed);
 
       // Messages Collection

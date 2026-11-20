@@ -21,6 +21,7 @@ export interface OfflineMessage {
     | 'reactionUpdated'
     | 'conversationUpdated'
     | 'chatParticipantsUpdated'
+    | 'chatDetailsUpdated'
     | 'chatRemoved'
     | 'joinChat'
     | 'followNotification'

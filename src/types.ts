@@ -515,6 +515,8 @@ export type ChatData = {
   verified: boolean;
   adminIds: string[];
   isPrivate: boolean;
+  /** Announcement mode: only admins may post. */
+  onlyAdminsCanSend?: boolean;
   lastMessageId: string;
   timestamp: string;
   lastUpdated: string;

@@ -38,3 +38,13 @@ test('only the sender can delete a message for everyone', () => {
   assert.equal(canDeleteMessage({ senderId: 'u', userId: 'x' }), false);
   assert.equal(canDeleteMessage({ userId: 'x' }), false);
 });
+
+import { canSendMessage } from '../../lib/chatPermissions.js';
+
+test('restricted groups only accept messages from admins', () => {
+  const group = { chatType: 'Group', onlyAdminsCanSend: true, adminIds: ['a'] };
+  assert.equal(canSendMessage({ ...group, userId: 'm' }), false);
+  assert.equal(canSendMessage({ ...group, userId: 'a' }), true);
+  assert.equal(canSendMessage({ ...group, onlyAdminsCanSend: false, userId: 'm' }), true);
+  assert.equal(canSendMessage({ chatType: 'DM', onlyAdminsCanSend: true, userId: 'm' }), true);
+});

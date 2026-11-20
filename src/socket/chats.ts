@@ -358,6 +358,51 @@ io.on('connection', async (socket: UserSocket) => {
       }
     });
 
+    // Announced by the API after an admin edits the group (details, admins, announcement mode).
+    // The payload is re-read from the DB, so a forged event can only re-send what is stored.
+    socket.on('chat:updated', async (data: { chatId?: string }, ack?: () => void) => {
+      try {
+        const chatId = data?.chatId;
+        if (!chatId || !ObjectId.isValid(chatId)) {
+          ack?.();
+          return;
+        }
+
+        const chat = await db.chats().findOne({ _id: new ObjectId(chatId) });
+        if (!chat || chat.chatType !== 'Group') {
+          ack?.();
+          return;
+        }
+
+        const participants = await db.chatParticipants().find({ chatId }, { projection: { userId: 1 } }).toArray();
+        const memberIds = Array.from(new Set(participants.map(p => p.userId).filter(Boolean)));
+        if (memberIds.length === 0) {
+          ack?.();
+          return;
+        }
+
+        await offlineMessageManager.broadcastMessage(
+          {
+            type: 'chatDetailsUpdated',
+            data: {
+              chatId,
+              name: chat.name?.group ?? '',
+              description: chat.groupDescription ?? '',
+              displayPicture: chat.groupDisplayPicture ?? '',
+              adminIds: chat.adminIds ?? [],
+              onlyAdminsCanSend: chat.onlyAdminsCanSend ?? false,
+            },
+          },
+          undefined,
+          memberIds
+        );
+        ack?.();
+      } catch (error) {
+        console.error('Error in chat:updated event:', error);
+        ack?.();
+      }
+    });
+
     // Announced by the API after it inserts membership rows. Re-derive the roster
     // from the DB so a forged payload cannot pull non-members into the room.
     socket.on('chat:participantsAdded', async (data: { chatId: string, addedUserIds?: string[] }, ack?: () => void) => {
