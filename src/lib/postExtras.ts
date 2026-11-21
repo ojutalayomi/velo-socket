@@ -1,3 +1,5 @@
+import { callPreview, parseCallRecord } from './callRecord.js';
+
 /** Validation for the optional poll / location attached to a post (mirrors velo's lib/polls.ts). */
 export type PollData = { question: string; options: string[]; multiple: boolean; expiresAt?: string };
 export type PostLocation = { name: string; lat?: number; lng?: number };
@@ -67,6 +69,10 @@ export function messageDisplayText(messageType: string | undefined, content: str
     } catch {
       /* fall through to raw content */
     }
+  }
+  if (messageType === 'Call') {
+    const record = parseCallRecord(content);
+    if (record) return callPreview(record);
   }
   return content ?? '';
 }

@@ -77,6 +77,12 @@ export const chatSocketHandler = async (
         return;
       }
 
+      // Call history cards are written by the call server only, never accepted from a client.
+      if (data.messageType === 'Call' && !options.trustedSender) {
+        io.to(`user:${senderId}`).emit('chatError', { error: 'That message type is not allowed' });
+        return;
+      }
+
       // Poll messages carry their definition as JSON; only a valid poll may use the Poll type.
       if (data.messageType === 'Poll') {
         const canonical = canonicalPollContent(data.content);
@@ -426,8 +432,9 @@ export const chatSocketHandler = async (
         }
       }
 
+      // A call card is history, not news: missed calls already send their own push.
       try {
-        await notifyChatMessage({
+        if (data.messageType !== 'Call') await notifyChatMessage({
           db,
           redis,
           chatId: data.chatId,

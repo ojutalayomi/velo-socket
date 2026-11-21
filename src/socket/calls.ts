@@ -7,6 +7,8 @@ import { loadNotificationPreferences } from '../notifications/settings.js';
 import { filterOnlineUsers } from '../presence.js';
 import { deliverPush, sendSilentClose } from '../push.js';
 import { isChatParticipant } from '../utils.js';
+import { buildCallRecord } from '../lib/callRecord.js';
+import { chatSocketHandler } from '../lib/chatSocketHandler.js';
 
 const CALL_RING_TIMEOUT_MS = 30_000;
 /** Group calls ring longer, since many people may be rung. */
@@ -30,6 +32,10 @@ interface ActiveCall {
   chatType: 'DM' | 'Group';
   status: CallStatus;
   startTime: number;
+  /** When a second person first joined; unset if nobody ever picked up. */
+  connectedAt?: number;
+  /** Most people in the call at once, for the history card. */
+  peakParticipants: number;
   endTime?: number;
   timer?: ReturnType<typeof setTimeout>;
   closeSent: boolean;
@@ -160,10 +166,59 @@ const callRoom = (callId: string) => `call:${callId}`;
 /** Per-participant room, so signalling can be addressed to one person (all of their devices). */
 const callUserRoom = (callId: string, userId: string) => `callu:${callId}:${userId}`;
 
+/**
+ * Leaves a "Call" card in the chat, like WhatsApp's call history. Sent as the caller, so it sits
+ * on their side of the conversation. Best-effort: a failure here never affects the call itself.
+ */
+async function recordCall(call: ActiveCall, content: string, endTime: number): Promise<void> {
+  try {
+    if (!ObjectId.isValid(call.roomId) || !ObjectId.isValid(call.callerId)) return;
+    const db = await new MongoDBClient().init();
+    const caller = await db.users().findOne(
+      { _id: new ObjectId(call.callerId) },
+      { projection: { name: 1, firstname: 1, lastname: 1, username: 1, displayPicture: 1, verified: 1 } }
+    );
+    if (!caller) return;
+
+    await chatSocketHandler(
+      {
+        _id: '',
+        chatId: call.roomId,
+        // A DM is addressed to the other person, a group to the chat itself.
+        receiverId: call.chatType === 'DM' ? (call.calleeId as string) : call.roomId,
+        content,
+        messageType: 'Call',
+        isRead: {},
+        sender: {
+          id: call.callerId,
+          name: caller.name || [caller.firstname, caller.lastname].filter(Boolean).join(' ') || call.callerName,
+          displayPicture: caller.displayPicture ?? '',
+          username: caller.username ?? '',
+          verified: Boolean(caller.verified),
+        },
+        reactions: [],
+        attachments: [],
+        quotedMessageId: '',
+        status: 'sent',
+        chatType: call.chatType,
+        timestamp: new Date(endTime).toISOString(),
+      } as never,
+      db,
+      call.callerId,
+      { trustedSender: true }
+    );
+  } catch (error) {
+    console.error('Error recording call in chat:', error);
+  }
+}
+
 function deleteCall(call: ActiveCall): void {
   clearRingTimer(call);
+  const endTime = Date.now();
+  // The outcome is read now, before the status is overwritten below.
+  void recordCall(call, JSON.stringify(buildCallRecord(call, endTime)), endTime);
   call.status = 'ended';
-  call.endTime = Date.now();
+  call.endTime = endTime;
   activeCalls.delete(call.callId);
   for (const [userId, callId] of userCalls) {
     if (callId === call.callId) userCalls.delete(userId);
@@ -274,6 +329,7 @@ export const handleCallInvite = async (
     chatType,
     status: 'ringing',
     startTime: Date.now(),
+    peakParticipants: 1,
     closeSent: false,
     missedSent: false,
   };
@@ -334,6 +390,8 @@ async function joinCall(socket: UserSocket, call: ActiveCall, userId: string): P
   call.profiles[userId] = profile;
   const existing = call.participants.filter((id) => id !== userId);
   if (!call.participants.includes(userId)) call.participants.push(userId);
+  call.peakParticipants = Math.max(call.peakParticipants, call.participants.length);
+  if (!call.connectedAt && call.participants.length >= 2) call.connectedAt = Date.now();
   userCalls.set(userId, call.callId);
 
   socket.join(callRoom(call.callId));
