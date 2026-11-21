@@ -6,6 +6,7 @@ import { io } from '../socket.js';
 import type { MessageAttributes } from '../types.js';
 import { ChatMessage } from './ChatMessage.js';
 import { buildAiContext, buildGroupContext, type GroupFacts } from './aiContext.js';
+import { nextAttempt, readReply } from './aiReply.js';
 import { aiModel, openRouter } from './openRouter.js';
 
 const CONTEXT_MESSAGES = 20;
@@ -106,14 +107,35 @@ export async function replyAsAi(params: GroupAiParams): Promise<void> {
     });
     const systemPrompt = facts ? `${SYSTEM_PROMPT}\n\n${buildGroupContext(facts)}` : SYSTEM_PROMPT;
 
-    const result = await openRouter.chat.completions.create({
-      model: aiModel(),
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...buildAiContext(history.reverse(), botId),
-      ],
-      max_tokens: MAX_REPLY_TOKENS,
-    });
+    const messages = [
+      { role: 'system' as const, content: systemPrompt },
+      ...buildAiContext(history.reverse(), botId),
+    ];
+
+    // An empty answer is often transient, or a reasoning model that used up its token budget:
+    // try once more (with more room if it ran out) before giving up.
+    let result: unknown;
+    let tokens = MAX_REPLY_TOKENS;
+    for (let attempt = 1; ; attempt++) {
+      result = await openRouter.chat.completions.create({
+        model: aiModel(),
+        messages,
+        max_tokens: tokens,
+      });
+      const reading = readReply(result);
+      if (reading.text) break;
+
+      const usage = (result as { usage?: unknown })?.usage;
+      console.warn(
+        `[ai] Empty reply (attempt ${attempt}) model=${aiModel()} finish_reason=${reading.finishReason ?? 'none'} ` +
+          `problem=${reading.problem ?? 'none'} max_tokens=${tokens} usage=${JSON.stringify(usage ?? null)}`
+      );
+      const next = nextAttempt(reading, tokens);
+      if (attempt >= 2 || !next.retry) {
+        throw new Error(`Empty AI response (${reading.problem ?? reading.finishReason ?? 'no text'})`);
+      }
+      tokens = next.tokens;
+    }
 
     const reply = await ChatMessage.fromOpenRouterResponse(result, chatId, askerId, botId, 'Markdown', 'Group');
     if (!reply) throw new Error('Empty AI response');
