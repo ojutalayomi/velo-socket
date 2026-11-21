@@ -7,7 +7,7 @@ import type { MessageAttributes } from '../types.js';
 import { ChatMessage } from './ChatMessage.js';
 import { buildAiContext, buildGroupContext, type GroupFacts } from './aiContext.js';
 import { nextAttempt, readReply } from './aiReply.js';
-import { aiModel, openRouter } from './openRouter.js';
+import { aiFallbackModel, aiModel, openRouter } from './openRouter.js';
 
 const CONTEXT_MESSAGES = 20;
 const MAX_REPLY_TOKENS = 1000;
@@ -116,9 +116,10 @@ export async function replyAsAi(params: GroupAiParams): Promise<void> {
     // try once more (with more room if it ran out) before giving up.
     let result: unknown;
     let tokens = MAX_REPLY_TOKENS;
+    let model = aiModel();
     for (let attempt = 1; ; attempt++) {
       result = await openRouter.chat.completions.create({
-        model: aiModel(),
+        model,
         messages,
         max_tokens: tokens,
       });
@@ -127,7 +128,7 @@ export async function replyAsAi(params: GroupAiParams): Promise<void> {
 
       const usage = (result as { usage?: unknown })?.usage;
       console.warn(
-        `[ai] Empty reply (attempt ${attempt}) model=${aiModel()} finish_reason=${reading.finishReason ?? 'none'} ` +
+        `[ai] Empty reply (attempt ${attempt}) model=${model} finish_reason=${reading.finishReason ?? 'none'} ` +
           `problem=${reading.problem ?? 'none'} max_tokens=${tokens} usage=${JSON.stringify(usage ?? null)}`
       );
       const next = nextAttempt(reading, tokens);
@@ -135,6 +136,8 @@ export async function replyAsAi(params: GroupAiParams): Promise<void> {
         throw new Error(`Empty AI response (${reading.problem ?? reading.finishReason ?? 'no text'})`);
       }
       tokens = next.tokens;
+      // A second try on the same model that just failed is the weaker option when another is set.
+      model = aiFallbackModel() ?? model;
     }
 
     const reply = await ChatMessage.fromOpenRouterResponse(result, chatId, askerId, botId, 'Markdown', 'Group');
