@@ -11,7 +11,8 @@ import { buildPostAiPrompt, type PostAiContext, type PostLike } from './postAiPr
 
 export type { PostLike } from './postAiPrompt.js';
 
-const MAX_REPLY_TOKENS = 600;
+// Room for hidden reasoning as well as the (short) answer; the prompt keeps replies brief.
+const MAX_REPLY_TOKENS = 3000;
 const MAX_REPLY_CHARS = 1000;
 const MAX_THREAD_DEPTH = 3;
 const MAX_SIBLING_COMMENTS = 8;

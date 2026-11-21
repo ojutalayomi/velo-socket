@@ -32,12 +32,14 @@ export function readReply(response: unknown): ReplyReading {
   return { text, finishReason: choice?.finish_reason, problem };
 }
 
+const MAX_RETRY_TOKENS = 8000;
+
 /** Whether a second attempt might help, and with how many tokens. */
 export function nextAttempt(reading: ReplyReading, tokens: number): { retry: boolean; tokens: number } {
   if (reading.problem?.startsWith('refusal') || reading.finishReason === 'content_filter') {
     return { retry: false, tokens };
   }
   // Reasoning models spend the budget thinking, leaving no room for the answer.
-  if (reading.finishReason === 'length') return { retry: true, tokens: tokens * 3 };
+  if (reading.finishReason === 'length') return { retry: true, tokens: Math.min(tokens * 3, MAX_RETRY_TOKENS) };
   return { retry: true, tokens };
 }

@@ -20,6 +20,7 @@ test('explains an empty reply', () => {
 
 test('retries with more tokens when the budget ran out, never after a refusal or filter', () => {
   assert.deepEqual(nextAttempt({ text: '', finishReason: 'length' }, 1000), { retry: true, tokens: 3000 });
+  assert.equal(nextAttempt({ text: '', finishReason: 'length' }, 4000).tokens, 8000);
   assert.deepEqual(nextAttempt({ text: '', finishReason: 'stop' }, 1000), { retry: true, tokens: 1000 });
   assert.equal(nextAttempt({ text: '', finishReason: 'content_filter' }, 1000).retry, false);
   assert.equal(nextAttempt({ text: '', problem: 'refusal: x' }, 1000).retry, false);

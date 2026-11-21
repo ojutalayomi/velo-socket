@@ -10,7 +10,11 @@ import { nextAttempt, readReply } from './aiReply.js';
 import { aiFallbackModel, aiModel, openRouter } from './openRouter.js';
 
 const CONTEXT_MESSAGES = 20;
-const MAX_REPLY_TOKENS = 1000;
+/**
+ * Room for the answer plus any hidden reasoning: reasoning models spend this budget thinking first,
+ * and the DM bot already allows 5000. Override with AI_MAX_TOKENS.
+ */
+const MAX_REPLY_TOKENS = Number(process.env.AI_MAX_TOKENS) > 0 ? Number(process.env.AI_MAX_TOKENS) : 4000;
 /** One request per user per chat in this window, so a group cannot run up the model bill. */
 const COOLDOWN_SECONDS = 8;
 
