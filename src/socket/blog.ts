@@ -12,6 +12,7 @@ import { resolveMentionedUserIds } from "../notifications/mentions.js";
 import { contentUrl } from "../notifications/targets.js";
 import { BlogPost, NotificationActor, NotificationTarget, PostSchema, ReactionType, SharedBlogPost } from "../types.js";
 import { io } from '../socket.js';
+import { sanitizeLocation, sanitizePoll } from '../lib/postExtras.js';
 import { deleteFileFromS3 } from "../s3.js";
 import { offlineMessageManager } from '../offline-messages.js';
 import { redis } from '../redis.js';
@@ -618,6 +619,12 @@ io.on('connection', (socket) => {
                 PostID: "",
             };
             blog.PostID = blog._id.toString();
+            if (blog.Type === 'post') {
+                const poll = sanitizePoll((data as { Poll?: unknown }).Poll);
+                if (poll) blog.Poll = poll;
+            }
+            const location = sanitizeLocation((data as { Location?: unknown }).Location);
+            if (location) blog.Location = location;
             // console.log(data)
 
             let notificationActor: NotificationActor | null = null;

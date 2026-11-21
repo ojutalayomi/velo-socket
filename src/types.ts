@@ -582,6 +582,8 @@ export type BlogPost = {
   Type: "post" | "comment" | "repost" | "quote";
   ParentId: string;
   IsFollowing: boolean;
+  Poll?: import('./lib/postExtras.js').PollData;
+  Location?: import('./lib/postExtras.js').PostLocation;
 }
 
 export interface SharedBlogPost extends BlogPost {
