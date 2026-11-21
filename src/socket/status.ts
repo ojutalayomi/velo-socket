@@ -60,7 +60,8 @@ io.on('connection', async (socket) => {
 
   socket.on('status:view', async (data: StatusViewPayload, ack?: () => void) => {
     try {
-      io.to(`user:${data.ownerId}`).emit('statusViewed', {
+      // Owner sees the new viewer; the viewer's other devices clear the unviewed ring.
+      io.to(`user:${data.ownerId}`).to(`user:${data.viewerId}`).emit('statusViewed', {
         statusId: data.statusId,
         ownerId: data.ownerId,
         viewerId: data.viewerId,
