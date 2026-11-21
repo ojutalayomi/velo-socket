@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
 import multer from 'multer';
 import multerS3 from 'multer-s3';
 
@@ -32,6 +32,21 @@ export async function uploadFileToS3(BUCKET_NAME: string, file: Buffer, fileKey:
   await s3Client.send(command);
 
   return `https://${params.Bucket}.s3.amazonaws.com/${params.Key}`;
+}
+
+/**
+ * Copies an object within a bucket, so a forwarded attachment owns its file and survives the
+ * original being deleted.
+ * @returns The URL of the copy
+ */
+export async function copyFileInS3(BUCKET_NAME: string, sourceKey: string, destKey: string) {
+  const encodedSource = sourceKey.split('/').map(encodeURIComponent).join('/');
+  await s3Client.send(new CopyObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: destKey,
+    CopySource: `${BUCKET_NAME}/${encodedSource}`,
+  }));
+  return `https://${BUCKET_NAME}.s3.amazonaws.com/${destKey}`;
 }
 
 /**

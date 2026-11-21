@@ -23,7 +23,7 @@ export const chatSocketHandler = async (
     data: MessageAttributes,
     db: MongoDBClient,
     authenticatedSenderId?: string,
-    options: { trustedSender?: boolean } = {}
+    options: { trustedSender?: boolean; forwarded?: boolean; preparedAttachments?: AttachmentSchema[] } = {}
 ) => {
     const senderId = authenticatedSenderId || data.sender?.id;
     try {
@@ -77,8 +77,9 @@ export const chatSocketHandler = async (
       }
 
       // Handle multiple file uploads (if attachments exist)
-      let attachmentsWithUrls: AttachmentSchema[] = [];
-      if (data.attachments && data.attachments.length > 0) {
+      // Forwarded messages arrive with their files already copied in storage.
+      let attachmentsWithUrls: AttachmentSchema[] = options.preparedAttachments ?? [];
+      if (!options.preparedAttachments && data.attachments && data.attachments.length > 0) {
         // Upload each file to S3 and store the URLs
         for (const file of data.attachments) {
           try {
@@ -109,7 +110,7 @@ export const chatSocketHandler = async (
       }
 
       // `@all` is decided here from the stored group, never from what the client claims.
-      const everyoneAllowed = !options.trustedSender && mentionsEveryone(data.content) && canMentionEveryone({
+      const everyoneAllowed = !options.trustedSender && !options.forwarded && mentionsEveryone(data.content) && canMentionEveryone({
         chatType: group?.chatType,
         adminIds: group?.adminIds,
         senderId,
@@ -129,6 +130,7 @@ export const chatSocketHandler = async (
         reactions: data.reactions || [],
         attachments: attachmentsWithUrls || [],
         quotedMessageId: data.quotedMessageId,
+        forwarded: options.forwarded,
         status: 'sent' as msgStatus,
         messageType: data.messageType as MessageType,
         mentions: mentions.map((mention) => ({
@@ -431,7 +433,7 @@ export const chatSocketHandler = async (
 
       // `@ai` in a group asks the assistant to reply. Not awaited: the model call is slow and
       // must not delay delivery. Bot replies are trusted senders and never re-trigger this.
-      if (!options.trustedSender && data.chatType === 'Group' && mentionsAi(data.content)) {
+      if (!options.trustedSender && !options.forwarded && data.chatType === 'Group' && mentionsAi(data.content)) {
         void replyAsAi({
           db,
           redis,

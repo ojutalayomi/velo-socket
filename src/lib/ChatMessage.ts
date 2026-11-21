@@ -21,6 +21,7 @@ export class ChatMessage implements MessageSchema {
     public quotedMessageId: string;
     public status: msgStatus;
     public mentions: Mention[];
+    public forwarded?: boolean;
   
     // constructor to force use of factory methods
     constructor(data: MessageAttributes) {
@@ -41,6 +42,7 @@ export class ChatMessage implements MessageSchema {
       this.status = data.status;
       this.chatType = data.chatType;
       this.mentions = data.mentions || [];
+      if (data.forwarded) this.forwarded = true;
     }
 
     public toMessageAttributes(attachments: Attachment[] = []): MessageAttributes {
@@ -59,6 +61,7 @@ export class ChatMessage implements MessageSchema {
             status: this.status,
             chatType: this.chatType,
             mentions: this.mentions,
+            ...(this.forwarded ? { forwarded: true } : {}),
         };
     }
   

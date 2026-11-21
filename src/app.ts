@@ -4,6 +4,7 @@ import cors from "cors";
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
+import { getPrivacy, invalidatePrivacy, filterVisibleOnline } from './privacy.js';
 import { updateUserOnlineStatus, updateLastActive, fetchUserGroup, updateReadReceipts, HEARTBEAT_INTERVAL } from './utils.js';
 import { heartbeat, getOnlineUserIds, isUserOnline, markConnected, markDisconnected, startPresenceSweep } from './presence.js';
 import './socket/chats.js'
@@ -79,7 +80,7 @@ io.on('connection', async (socket: UserSocket) => {
 
       // Send the current presence snapshot so clients that were disconnected
       // do not keep stale online/offline state from missed status events.
-      socket.emit('onlineUsers', await getOnlineUserIds(redis));
+      socket.emit('onlineUsers', await filterVisibleOnline(await getOnlineUserIds(redis)));
     }
   });
 
@@ -96,7 +97,14 @@ io.on('connection', async (socket: UserSocket) => {
     showReadReceipts: boolean;
     showTypingStatus: boolean;
   }) => {
-    console.log('updateSettings: ' + data);
+    // The saved settings are the source of truth (the web API stores them before emitting
+    // this), so drop the cached copy and tell everyone the current online status.
+    if (userId) {
+      invalidatePrivacy(userId);
+      const visible = (await getPrivacy(userId)).showOnlineStatus;
+      const online = await isUserOnline(redis, userId);
+      io.emit('userStatus', { userId, status: online && visible ? 'online' : 'offline' });
+    }
     if (data.showLastSeen) {
       await updateLastActive(userId as string, redis);
     }
@@ -255,7 +263,8 @@ io.on('connection', async (socket: UserSocket) => {
   socket.on('subscribeToUser', async (userId: string) => {
     socket.join(`user:${userId}`);
     const isOnline = await isUserOnline(redis, userId);
-    io.emit('userStatus', { userId, status: isOnline ? 'online' : 'offline' });
+    const visible = (await getPrivacy(userId)).showOnlineStatus;
+    io.emit('userStatus', { userId, status: isOnline && visible ? 'online' : 'offline' });
   });
 
   socket.on('getRoomMembers', (chatId: string) => {

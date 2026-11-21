@@ -49,7 +49,25 @@ export function canDeleteChat(params: {
   return params.chatType === 'Group' ? Boolean(params.adminIds?.includes(params.userId)) : true;
 }
 
-/** "Delete for everyone" is limited to the message's own sender. */
-export function canDeleteMessage(params: { senderId?: string; userId: string }): boolean {
-  return Boolean(params.senderId) && params.senderId === params.userId;
+/** Content shown in place of a message an admin removed; same trailing marker the clients use. */
+export const ADMIN_DELETED_CONTENT = 'This message was deleted by an admin.≤≤≤';
+
+/** Stored when a sender deletes their own message; each client words it for its own viewer. */
+export const SENDER_DELETED_CONTENT = 'This message was deleted.≤≤≤';
+
+export type MessageDeletion = 'sender' | 'admin';
+
+/**
+ * Who may delete a message for everyone: its sender anywhere, and an admin of a group.
+ * In a DM (or any non-group chat) only the sender can.
+ */
+export function messageDeletion(params: {
+  senderId?: string;
+  userId: string;
+  chatType?: string;
+  adminIds?: string[];
+}): MessageDeletion | null {
+  if (params.senderId && params.senderId === params.userId) return 'sender';
+  if (params.chatType === 'Group' && params.adminIds?.includes(params.userId)) return 'admin';
+  return null;
 }

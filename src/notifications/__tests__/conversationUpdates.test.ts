@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { canDeleteChat, canDeleteMessage, parseParticipantUpdates } from '../../lib/conversationUpdates.js';
+import { canDeleteChat, messageDeletion, parseParticipantUpdates } from '../../lib/conversationUpdates.js';
 
 test('accepts whitelisted fields and ignores the client-supplied userId', () => {
   assert.deepEqual(parseParticipantUpdates({ pinned: true, userId: 'someone-else' }), { pinned: true });
@@ -34,9 +34,14 @@ test('chat deletion needs membership, plus admin for groups', () => {
 });
 
 test('only the sender can delete a message for everyone', () => {
-  assert.equal(canDeleteMessage({ senderId: 'u', userId: 'u' }), true);
-  assert.equal(canDeleteMessage({ senderId: 'u', userId: 'x' }), false);
-  assert.equal(canDeleteMessage({ userId: 'x' }), false);
+  assert.equal(messageDeletion({ senderId: 'u', userId: 'u' }), 'sender');
+  assert.equal(messageDeletion({ senderId: 'u', userId: 'u', chatType: 'Group', adminIds: ['u'] }), 'sender');
+  assert.equal(messageDeletion({ senderId: 'u', userId: 'x' }), null);
+  assert.equal(messageDeletion({ senderId: 'u', userId: 'x', chatType: 'Group', adminIds: ['a'] }), null);
+  assert.equal(messageDeletion({ senderId: 'u', userId: 'a', chatType: 'Group', adminIds: ['a'] }), 'admin');
+  // A DM has no admins, whatever the stored adminIds say.
+  assert.equal(messageDeletion({ senderId: 'u', userId: 'a', chatType: 'DM', adminIds: ['a'] }), null);
+  assert.equal(messageDeletion({ userId: 'x' }), null);
 });
 
 import { canSendMessage } from '../../lib/chatPermissions.js';

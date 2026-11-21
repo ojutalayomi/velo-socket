@@ -23,6 +23,7 @@ export interface OfflineMessage {
     | 'chatParticipantsUpdated'
     | 'chatDetailsUpdated'
     | 'chatRemoved'
+    | 'messageDeleted'
     | 'joinChat'
     | 'followNotification'
     | 'statusCreated'

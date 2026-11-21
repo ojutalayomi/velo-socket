@@ -5,8 +5,10 @@ import { MongoDBClient } from "../mongodb.js";
 import { io, UserSocket } from '../socket.js';
 import { offlineMessageManager } from '../offline-messages.js';
 import { chatSocketHandler } from "../lib/chatSocketHandler.js";
+import { forwardMessages } from "../lib/forwardMessages.js";
 import { isChatParticipant } from '../utils.js';
-import { canDeleteChat, canDeleteMessage, parseParticipantUpdates } from '../lib/conversationUpdates.js';
+import { getPrivacy } from '../privacy.js';
+import { ADMIN_DELETED_CONTENT, canDeleteChat, messageDeletion, parseParticipantUpdates, SENDER_DELETED_CONTENT } from '../lib/conversationUpdates.js';
 
 io.on('connection', async (socket: UserSocket) => {
   try {
@@ -244,14 +246,34 @@ io.on('connection', async (socket: UserSocket) => {
             ack?.({ ok: true });
             return;
           } else {
-            // Delete one message for everyone: only its sender may do this
+            // Delete one message for everyone: its sender, or an admin of a group
             const messageId = new ObjectId(id);
             const message = await db.chatMessages().findOne({ _id: messageId });
             if (!message) return;
-            if (!canDeleteMessage({ senderId: message.sender?.id, userId })) {
-              socket.emit('chatError', { error: 'You can only delete your own messages' });
+            // Admin rights come from the stored chat, never from the client.
+            const messageChat = ObjectId.isValid(message.chatId)
+              ? await db.chats().findOne(
+                  { _id: new ObjectId(message.chatId) },
+                  { projection: { chatType: 1, adminIds: 1 } }
+                )
+              : null;
+            const deletion = messageDeletion({
+              senderId: message.sender?.id,
+              userId,
+              chatType: messageChat?.chatType,
+              adminIds: messageChat?.adminIds,
+            });
+            if (!deletion) {
+              socket.emit('chatError', {
+                error: messageChat?.chatType === 'Group'
+                  ? 'Only the sender or a group admin can delete this message'
+                  : 'You can only delete your own messages',
+              });
               return;
             }
+            // Already a placeholder: nothing left to remove or announce.
+            if (message.content?.endsWith('≤≤≤')) return;
+
             if (message.attachments && message.attachments.length > 0) {
               try {
                 await S3.deleteFileFromS3('files-for-chat', message.attachments);
@@ -259,10 +281,39 @@ io.on('connection', async (socket: UserSocket) => {
                 console.error('Error deleting attachment from S3:', error);
               }
             }
-            await db.chatMessages().deleteOne({ _id: messageId })
-            await db.readReceipts().deleteMany({ messageId: messageId.toString() })
+
+            // Keep a placeholder instead of removing the row, so every member (and anyone loading
+            // the chat later) sees that something was deleted.
+            const placeholder = deletion === 'admin' ? ADMIN_DELETED_CONTENT : SENDER_DELETED_CONTENT;
+            await db.chatMessages().updateOne(
+              { _id: messageId },
+              { $set: { content: placeholder, attachments: [], mentions: [], messageType: 'Text' as MessageType } }
+            );
+            await db.readReceipts().deleteMany({ messageId: messageId.toString() });
             if (message.attachments && message.attachments.length > 0) {
               await db.files().deleteMany({ key: { $in: message.attachments } });
+            }
+
+            const members = await db.chatParticipants()
+              .find({ chatId: message.chatId }, { projection: { userId: 1 } })
+              .toArray();
+            try {
+              await offlineMessageManager.broadcastMessage(
+                {
+                  type: 'messageDeleted',
+                  data: {
+                    chatId: message.chatId,
+                    messageId: id,
+                    content: placeholder,
+                    deletedBy: userId,
+                    byAdmin: deletion === 'admin',
+                  },
+                },
+                undefined,
+                Array.from(new Set(members.map((row) => row.userId).filter(Boolean)))
+              );
+            } catch (error) {
+              console.error('Error announcing the deleted message:', error);
             }
             return;
           }
@@ -346,16 +397,28 @@ io.on('connection', async (socket: UserSocket) => {
       await chatSocketHandler(data, db, userId);
     });
 
-    socket.on('typing', (data: { user: Partial<UserSchema>, to: string }) => {
+    socket.on('forwardMessages', async (data: unknown, ack?: (result: unknown) => void) => {
       try {
+        ack?.(await forwardMessages(db, userId, data));
+      } catch (error) {
+        console.error('Error in forwardMessages event:', error);
+        ack?.({ ok: false, error: 'Could not forward messages' });
+      }
+    });
+
+    socket.on('typing', async (data: { user: Partial<UserSchema>, to: string }) => {
+      try {
+        // Respect "Show typing status": a user who turned it off never reveals typing.
+        if (!(await getPrivacy(userId)).showTypingStatus) return;
         io.to(data.to).emit('userTyping', data);
       } catch (error) {
         console.error('Error in typing event:', error);
       }
     });
 
-    socket.on('stopTyping', (data: { user: Partial<UserSchema>, to: string }) => {
+    socket.on('stopTyping', async (data: { user: Partial<UserSchema>, to: string }) => {
       try {
+        if (!(await getPrivacy(userId)).showTypingStatus) return;
         io.to(data.to).emit('userStopTyping', data);
       } catch (error) {
         console.error('Error in stopTyping event:', error);

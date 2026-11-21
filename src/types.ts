@@ -418,6 +418,8 @@ export interface Message {
   quotedMessageId: string;
   status: msgStatus;
   mentions?: Mention[];
+  /** Set on copies created by forwarding. */
+  forwarded?: boolean;
 }
 
 export interface MessageAttributes extends Message {
