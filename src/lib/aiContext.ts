@@ -1,3 +1,5 @@
+import { messageDisplayText } from './postExtras.js';
+
 const MAX_CONTEXT_CHARS = 2000;
 
 const MAX_MEMBERS_LISTED = 40;
@@ -44,6 +46,7 @@ export type ChatTurn = { role: 'user' | 'assistant'; content: string };
 export function buildAiContext(
   messages: {
     _id?: unknown;
+    messageType?: string;
     content?: string;
     quotedMessageId?: string;
     sender?: { id?: string; name?: string; username?: string };
@@ -53,7 +56,7 @@ export function buildAiContext(
   const turns: ChatTurn[] = [];
   const byId = new Map(messages.map((m) => [String(m._id), m]));
   for (const message of messages) {
-    let text = (message.content ?? '').trim().slice(0, MAX_CONTEXT_CHARS);
+    let text = messageDisplayText(message.messageType, message.content).trim().slice(0, MAX_CONTEXT_CHARS);
     if (!text) continue;
     const quoted = message.quotedMessageId ? byId.get(message.quotedMessageId) : undefined;
     if (quoted?.content) {

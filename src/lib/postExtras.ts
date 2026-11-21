@@ -46,3 +46,27 @@ export function sanitizeLocation(input: unknown): PostLocation | null {
   }
   return location;
 }
+
+/** Validates a poll message's JSON content; returns the canonical JSON, or null if invalid. */
+export function canonicalPollContent(content: unknown): string | null {
+  if (typeof content !== 'string') return null;
+  try {
+    const poll = sanitizePoll(JSON.parse(content));
+    return poll ? JSON.stringify(poll) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Readable text for notifications/AI: poll messages store JSON, which should not be shown raw. */
+export function messageDisplayText(messageType: string | undefined, content: string | undefined): string {
+  if (messageType === 'Poll') {
+    try {
+      const poll = sanitizePoll(JSON.parse(content ?? ''));
+      if (poll) return `📊 ${poll.question}`;
+    } catch {
+      /* fall through to raw content */
+    }
+  }
+  return content ?? '';
+}

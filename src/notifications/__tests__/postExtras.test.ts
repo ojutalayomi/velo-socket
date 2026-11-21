@@ -17,3 +17,20 @@ test('sanitizeLocation requires a name and drops invalid coordinates', () => {
   assert.deepEqual(sanitizeLocation({ name: 'Lagos', lat: 999, lng: 3 }), { name: 'Lagos' });
   assert.equal(sanitizeLocation({ name: '  ' }), null);
 });
+
+import { canonicalPollContent, messageDisplayText } from '../../lib/postExtras.js';
+
+test('canonicalPollContent accepts only valid poll JSON', () => {
+  const ok = canonicalPollContent(JSON.stringify({ question: ' Q ', options: ['a', 'b'], multiple: false, extra: 1 }));
+  assert.equal(ok, JSON.stringify({ question: 'Q', options: ['a', 'b'], multiple: false }));
+  assert.equal(canonicalPollContent('not json'), null);
+  assert.equal(canonicalPollContent(JSON.stringify({ question: 'Q', options: ['a'] })), null);
+  assert.equal(canonicalPollContent(42), null);
+});
+
+test('messageDisplayText hides poll JSON but leaves other content alone', () => {
+  const content = JSON.stringify({ question: 'Lunch?', options: ['a', 'b'], multiple: false });
+  assert.equal(messageDisplayText('Poll', content), '📊 Lunch?');
+  assert.equal(messageDisplayText('Markdown', content), content);
+  assert.equal(messageDisplayText('Poll', 'garbage'), 'garbage');
+});

@@ -1,4 +1,5 @@
 import { ObjectId } from "mongodb";
+import { canonicalPollContent, messageDisplayText } from './postExtras.js';
 import { offlineMessageManager } from "../offline-messages.js";
 import { io } from "../socket.js";
 import { MessageAttributes, AttachmentSchema, msgStatus, MessageType, MentionNotification } from "../types.js";
@@ -74,6 +75,16 @@ export const chatSocketHandler = async (
       })) {
         io.to(`user:${senderId}`).emit('chatError', { error: 'Only admins can send messages in this group' });
         return;
+      }
+
+      // Poll messages carry their definition as JSON; only a valid poll may use the Poll type.
+      if (data.messageType === 'Poll') {
+        const canonical = canonicalPollContent(data.content);
+        if (!canonical) {
+          io.to(`user:${senderId}`).emit('chatError', { error: 'That poll is not valid' });
+          return;
+        }
+        data.content = canonical;
       }
 
       // Handle multiple file uploads (if attachments exist)
@@ -372,7 +383,7 @@ export const chatSocketHandler = async (
                   targetType: 'chat_message',
                   targetId: mentionNotification.messageId,
                   url: chatUrl(data.chatId, data.chatType),
-                  snippet: data.content,
+                  snippet: messageDisplayText(data.messageType, data.content),
                   chatId: data.chatId,
                   chatType: data.chatType,
                 });
@@ -422,7 +433,7 @@ export const chatSocketHandler = async (
           chatId: data.chatId,
           senderId,
           messageId: message._id?.toString() || '',
-          content: data.content,
+          content: messageDisplayText(data.messageType, data.content),
           attachmentCount: attachmentsWithUrls.length,
           mentions,
           everyone: everyoneAllowed,
