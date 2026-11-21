@@ -238,8 +238,14 @@ io.on('connection', async (socket: UserSocket) => {
   });
 
   // WebRTC signaling for calls
+  socket.on('call:active', async (data: { roomId?: string }) => {
+    const { handleCallActive } = await import('./socket/calls.js');
+    await handleCallActive(socket, data);
+  });
+
   socket.on('webrtc:offer', async (data: {
     callId: string;
+    to: string;
     offer: any;
   }) => {
     const { handleWebRTCOffer } = await import('./socket/calls.js');
@@ -248,6 +254,7 @@ io.on('connection', async (socket: UserSocket) => {
 
   socket.on('webrtc:answer', async (data: {
     callId: string;
+    to: string;
     answer: any;
   }) => {
     const { handleWebRTCAnswer } = await import('./socket/calls.js');
@@ -256,6 +263,7 @@ io.on('connection', async (socket: UserSocket) => {
 
   socket.on('webrtc:candidate', async (data: {
     callId: string;
+    to: string;
     candidate: any;
   }) => {
     const { handleWebRTCCandidate } = await import('./socket/calls.js');
