@@ -5,7 +5,7 @@ import { MongoDBClient } from '../mongodb.js';
 import { io } from '../socket.js';
 import type { MessageAttributes } from '../types.js';
 import { ChatMessage } from './ChatMessage.js';
-import { buildAiContext } from './aiContext.js';
+import { buildAiContext, buildGroupContext, type GroupFacts } from './aiContext.js';
 import { aiModel, openRouter } from './openRouter.js';
 
 const CONTEXT_MESSAGES = 20;
@@ -18,6 +18,41 @@ const SYSTEM_PROMPT =
   'each of their messages starts with their name. Answer the person who most recently mentioned ' +
   '@ai, using the earlier messages as context. Be concise, use Markdown only when it helps, and ' +
   'do not start your reply with your own name.';
+
+const MAX_MEMBERS_FETCHED = 60;
+
+async function loadGroupFacts(db: MongoDBClient, chatId: string, trigger: MessageAttributes): Promise<GroupFacts | null> {
+  if (!ObjectId.isValid(chatId)) return null;
+  const [chat, participants] = await Promise.all([
+    db.chats().findOne({ _id: new ObjectId(chatId) }),
+    db.chatParticipants().find({ chatId }).limit(MAX_MEMBERS_FETCHED + 1).toArray(),
+  ]);
+  if (!chat) return null;
+
+  const total = participants.length > MAX_MEMBERS_FETCHED
+    ? await db.chatParticipants().countDocuments({ chatId })
+    : participants.length;
+  const ids = [...new Set([...participants.map((p) => p.userId), ...(chat.adminIds ?? [])])]
+    .filter((id) => ObjectId.isValid(id))
+    .slice(0, MAX_MEMBERS_FETCHED + 20);
+  const users = await db.users().find({ _id: { $in: ids.map((id) => new ObjectId(id)) } }).toArray();
+  const byId = new Map(users.map((u) => [u._id.toString(), u]));
+  const label = (id: string) => byId.get(id)?.name || byId.get(id)?.username || 'Unknown';
+
+  return {
+    name: chat.name?.group ?? Object.values(chat.name ?? {})[0],
+    description: chat.groupDescription,
+    createdAt: chat.timestamp,
+    isPrivate: chat.isPrivate,
+    memberCount: total,
+    admins: (chat.adminIds ?? []).map(label),
+    members: participants.slice(0, MAX_MEMBERS_FETCHED).map((p) => {
+      const u = byId.get(p.userId);
+      return { name: label(p.userId), username: u?.username, bio: u?.bio };
+    }),
+    asker: { name: trigger.sender.name, username: trigger.sender.username },
+  };
+}
 
 export interface GroupAiParams {
   db: MongoDBClient;
@@ -65,10 +100,16 @@ export async function replyAsAi(params: GroupAiParams): Promise<void> {
       .limit(CONTEXT_MESSAGES)
       .toArray();
 
+    const facts = await loadGroupFacts(db, chatId, trigger).catch((error) => {
+      console.error('[ai] Could not load group details:', error);
+      return null;
+    });
+    const systemPrompt = facts ? `${SYSTEM_PROMPT}\n\n${buildGroupContext(facts)}` : SYSTEM_PROMPT;
+
     const result = await openRouter.chat.completions.create({
       model: aiModel(),
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
         ...buildAiContext(history.reverse(), botId),
       ],
       max_tokens: MAX_REPLY_TOKENS,
