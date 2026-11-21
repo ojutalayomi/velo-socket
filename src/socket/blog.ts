@@ -12,6 +12,7 @@ import { resolveMentionedUserIds } from "../notifications/mentions.js";
 import { contentUrl } from "../notifications/targets.js";
 import { BlogPost, NotificationActor, NotificationTarget, PostSchema, ReactionType, SharedBlogPost } from "../types.js";
 import { io } from '../socket.js';
+import { maybeReplyAsAiToPost, type PostLike } from '../lib/postAi.js';
 import { sanitizeLocation, sanitizePoll } from '../lib/postExtras.js';
 import { deleteFileFromS3 } from "../s3.js";
 import { offlineMessageManager } from '../offline-messages.js';
@@ -491,6 +492,8 @@ io.on('connection', (socket) => {
                         }
                     }, userId);
 
+                    void maybeReplyAsAiToPost({ redis, post: quote as unknown as PostLike });
+
                     // Notify original post author and parse mentions from quote caption
                     try {
                         const notificationActor = await loadActor(inboxDb, userId);
@@ -786,6 +789,11 @@ io.on('connection', (socket) => {
                 }
             }
         
+            // `@ai` asks the assistant to answer as a comment. Not awaited: the model call is slow.
+            if (blog.Type === 'post' || blog.Type === 'comment') {
+                void maybeReplyAsAiToPost({ redis, post: blog as unknown as PostLike });
+            }
+
             io.to(`user:${userId}`).emit("post_response", { 
                 message: `${data.Type.toUpperCase()} added successfully!`, 
                 success: true 
