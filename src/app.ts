@@ -123,6 +123,12 @@ io.on('connection', async (socket: UserSocket) => {
     }
   }, HEARTBEAT_INTERVAL);
 
+  socket.on('disconnecting', () => {
+    import('./socket/calls.js')
+      .then(({ handleCallSocketDisconnecting }) => handleCallSocketDisconnecting(socket))
+      .catch((error) => console.error('Error ending calls on disconnect:', error));
+  });
+
   socket.on('disconnect', async () => {
     clearInterval(heartbeatTimer);
     if (userId) {

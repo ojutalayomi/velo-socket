@@ -17,6 +17,7 @@ interface ActiveCall {
   roomId: string;
   callerId: string;
   callerName: string;
+  callerAvatar: string;
   calleeId?: string;
   participants: string[];
   callType: 'audio' | 'video';
@@ -29,24 +30,27 @@ interface ActiveCall {
   missedSent: boolean;
 }
 
-async function loadDisplayName(userId: string): Promise<string> {
-  if (!ObjectId.isValid(userId)) return 'Someone';
+async function loadCaller(userId: string): Promise<{ name: string; avatar: string }> {
+  const fallback = { name: 'Someone', avatar: '' };
+  if (!ObjectId.isValid(userId)) return fallback;
 
   try {
     const db = await new MongoDBClient().init();
     const user = await db.users().findOne(
       { _id: new ObjectId(userId) },
-      { projection: { firstname: 1, lastname: 1, username: 1 } }
+      { projection: { firstname: 1, lastname: 1, username: 1, displayPicture: 1 } }
     );
-    if (!user) return 'Someone';
-    return (
-      [user.firstname, user.lastname].filter(Boolean).join(' ').trim() ||
-      user.username ||
-      'Someone'
-    );
+    if (!user) return fallback;
+    return {
+      name:
+        [user.firstname, user.lastname].filter(Boolean).join(' ').trim() ||
+        user.username ||
+        fallback.name,
+      avatar: user.displayPicture ?? '',
+    };
   } catch (error) {
     console.error('Error loading call display name:', error);
-    return 'Someone';
+    return fallback;
   }
 }
 
@@ -146,6 +150,17 @@ function deleteCall(call: ActiveCall): void {
   call.status = 'ended';
   call.endTime = Date.now();
   activeCalls.delete(call.callId);
+  for (const [userId, callId] of userCalls) {
+    if (callId === call.callId) userCalls.delete(userId);
+  }
+}
+
+/** Everyone who might hold a UI for this call: its room, the caller, and whoever was rung. */
+function emitToCallAudience(call: ActiveCall, event: string, payload: Record<string, unknown>): void {
+  const rooms = [`call:${call.callId}`, `user:${call.callerId}`];
+  if (call.chatType === 'DM' && call.calleeId) rooms.push(`user:${call.calleeId}`);
+  if (call.chatType === 'Group') rooms.push(`group:${call.roomId}`);
+  io.to(rooms).emit(event, payload);
 }
 
 async function handleRingTimeout(callId: string): Promise<void> {
@@ -160,14 +175,15 @@ async function handleRingTimeout(callId: string): Promise<void> {
     console.error('Error settling timed-out call:', error);
   }
 
-  io.to(`call:${callId}`).emit('call:ended', { callId, reason: 'timeout' });
-  io.to(`user:${call.callerId}`).emit('call:ended', { callId, reason: 'timeout' });
+  emitToCallAudience(call, 'call:ended', { callId, reason: 'timeout' });
   deleteCall(call);
   console.log(`Call ${callId} timed out`);
 }
 
 // Store active calls and their participants
 const activeCalls = new Map<string, ActiveCall>();
+/** userId -> the call they are ringing for or talking in (one at a time). */
+const userCalls = new Map<string, string>();
 
 // Handle call invitations
 export const handleCallInvite = async (
@@ -194,12 +210,24 @@ export const handleCallInvite = async (
     return;
   }
 
-  const callId = `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  // One call at a time per person, on either end.
+  if (userCalls.has(callerId)) {
+    socket.emit('call:ended', { callId: userCalls.get(callerId), reason: 'already-in-call', local: true });
+    return;
+  }
+  if (chatType === 'DM' && userCalls.has(targetUserId as string)) {
+    socket.emit('call:ended', { callId: null, reason: 'busy', local: true });
+    return;
+  }
+
+  const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+  const caller = await loadCaller(callerId);
   const call: ActiveCall = {
     callId,
     roomId,
     callerId,
-    callerName: await loadDisplayName(callerId),
+    callerName: caller.name,
+    callerAvatar: caller.avatar,
     calleeId: chatType === 'DM' ? targetUserId : undefined,
     participants: [callerId],
     callType,
@@ -210,26 +238,28 @@ export const handleCallInvite = async (
     missedSent: false,
   };
   activeCalls.set(callId, call);
+  userCalls.set(callerId, callId);
+
+  // The caller listens on the call room for signalling from the person who answers.
+  socket.join(`call:${callId}`);
 
   console.log(`Call invitation: ${callerId} -> ${roomId} (${callType}, ${chatType})`);
 
+  const invite = {
+    callId,
+    roomId,
+    callerId,
+    callerName: caller.name,
+    callerAvatar: caller.avatar,
+    callType,
+    chatType,
+  };
+
   if (chatType === 'Group') {
     // Group calls are signal-only: no push, no ring timeout, no missed-call push.
-    io.to(`group:${roomId}`).emit('call:invite', {
-      callId,
-      roomId,
-      callerId,
-      callType,
-      chatType,
-    });
+    socket.to(`group:${roomId}`).emit('call:invite', invite);
   } else {
-    io.to(`user:${targetUserId}`).emit('call:invite', {
-      callId,
-      roomId,
-      callerId,
-      callType,
-      chatType,
-    });
+    io.to(`user:${targetUserId}`).emit('call:invite', invite);
 
     sendIncomingCallPush(call).catch((error) =>
       console.error('Error sending incoming call push:', error)
@@ -244,7 +274,7 @@ export const handleCallInvite = async (
   }
 
   // Confirm call initiated to caller
-  socket.emit('call:initiated', { callId, roomId });
+  socket.emit('call:initiated', { callId, roomId, callType, chatType });
 };
 
 // Handle call answers
@@ -261,72 +291,65 @@ export const handleCallAnswer = async (
 
   if (!call || !userId) return;
   if (call.status !== 'ringing') return;
+  if (userId === call.callerId) return;
   if (call.chatType === 'DM' && userId !== call.calleeId) return;
+  if (call.chatType === 'Group' && !(await isChatParticipant(call.roomId, userId))) return;
 
   if (accepted) {
+    if (userCalls.has(userId)) {
+      socket.emit('call:ended', { callId, reason: 'already-in-call', local: true });
+      return;
+    }
     clearRingTimer(call);
     call.status = 'connected';
+    call.calleeId = userId;
     if (!call.participants.includes(userId)) call.participants.push(userId);
+    userCalls.set(userId, callId);
 
-    // Join the receiver to the call room for WebRTC signaling
     socket.join(`call:${callId}`);
 
-    // Dismiss the ringing notification on the callee's other devices
+    // The caller creates the WebRTC offer once someone has answered.
+    socket.to(`call:${callId}`).emit('call:answered', { callId, userId });
+
+    // Everyone else who was ringing (other devices, other group members) can dismiss it.
+    const others = call.chatType === 'DM' ? `user:${userId}` : `group:${call.roomId}`;
+    socket.to(others).emit('call:handled', { callId, by: userId });
+
     await dismissCallNotification(call);
-
-    // Notify caller that call was answered
-    io.to(`user:${call.callerId}`).emit('call:answered', { callId });
-
-    // Notify all participants in the call room
-    io.to(`call:${callId}`).emit('call:connected', {
-      callId,
-      participants: call.participants,
-    });
-
-    // Also notify the caller directly to ensure they receive the connected event
-    io.to(`user:${call.callerId}`).emit('call:connected', {
-      callId,
-      participants: call.participants,
-    });
-
-    console.log(`Call ${callId} connected with participants:`, call.participants);
-  } else {
+    console.log(`Call ${callId} answered by ${userId}`);
+  } else if (call.chatType === 'DM') {
     clearRingTimer(call);
     call.status = 'declined';
     call.endTime = Date.now();
 
-    // Notify caller that call was declined
     io.to(`user:${call.callerId}`).emit('call:declined', { callId });
+    socket.to(`user:${userId}`).emit('call:handled', { callId, by: userId });
 
     await dismissCallNotification(call);
-    activeCalls.delete(callId);
+    deleteCall(call);
     console.log(`Call ${callId} declined`);
   }
+  // In a group, one member declining does not end the call for everyone else.
 };
 
-// Handle WebRTC signaling
-export const handleWebRTCOffer = (socket: UserSocket, data: {
-  callId: string;
-  offer: any;
-}) => {
-  const { callId, offer } = data;
-  io.to(`call:${callId}`).emit('webrtc:offer', { callId, offer });
+// WebRTC signalling is relayed to the other side of the call only, and only from
+// sockets that actually joined the call room.
+function relaySignal(socket: UserSocket, callId: string, event: string, payload: Record<string, unknown>) {
+  const room = `call:${callId}`;
+  if (!activeCalls.has(callId) || !socket.rooms.has(room)) return;
+  socket.to(room).emit(event, { callId, ...payload });
+}
+
+export const handleWebRTCOffer = (socket: UserSocket, data: { callId: string; offer: unknown }) => {
+  relaySignal(socket, data.callId, 'webrtc:offer', { offer: data.offer });
 };
 
-export const handleWebRTCAnswer = (socket: UserSocket, data: {
-  callId: string;
-  answer: any;
-}) => {
-  const { callId, answer } = data;
-  io.to(`call:${callId}`).emit('webrtc:answer', { callId, answer });
+export const handleWebRTCAnswer = (socket: UserSocket, data: { callId: string; answer: unknown }) => {
+  relaySignal(socket, data.callId, 'webrtc:answer', { answer: data.answer });
 };
 
-export const handleWebRTCCandidate = (socket: UserSocket, data: {
-  callId: string;
-  candidate: any;
-}) => {
-  const { callId, candidate } = data;
-  io.to(`call:${callId}`).emit('webrtc:candidate', { callId, candidate });
+export const handleWebRTCCandidate = (socket: UserSocket, data: { callId: string; candidate: unknown }) => {
+  relaySignal(socket, data.callId, 'webrtc:candidate', { candidate: data.candidate });
 };
 
 // Handle call end
@@ -371,8 +394,7 @@ export const handleCallEnd = async (
     }
   }
 
-  io.to(`call:${callId}`).emit('call:ended', { callId });
-  io.to(`user:${call.callerId}`).emit('call:ended', { callId });
+  emitToCallAudience(call, 'call:ended', { callId, reason: 'hangup', by: userId });
   deleteCall(call);
   console.log(`Call ${callId} ended by ${userId}`);
 };
@@ -397,6 +419,14 @@ export const handleCallHangup = async (
 
   // Legacy event for compatibility
   io.to(`group:${roomId}`).emit('remote-hangup', roomId);
+};
+
+/** A dropped connection hangs up the calls that socket had joined (not other devices' calls). */
+export const handleCallSocketDisconnecting = async (socket: UserSocket) => {
+  for (const room of socket.rooms) {
+    if (!room.startsWith('call:')) continue;
+    await handleCallEnd(socket, { callId: room.slice('call:'.length) });
+  }
 };
 
 // Get call information
