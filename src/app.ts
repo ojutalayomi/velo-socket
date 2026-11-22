@@ -12,10 +12,10 @@ import './socket/blog.js'
 import './socket/follow.js'
 import './socket/calls.js'
 import './socket/status.js'
-import './socket/announcements.js'
 import { io, UserSocket } from './socket.js';
 import { app, corsOptions, server } from './server.js';
 import callsRouter from './routes/calls.js';
+import announcementsRouter from './routes/announcements.js';
 import { offlineMessageManager } from './offline-messages.js';
 import { redis as sharedRedis } from './redis.js';
 import chatHandler from './api/chat.js';
@@ -26,6 +26,7 @@ app.use(cors(corsOptions));
 
 // API routes
 app.use('/api/calls', callsRouter);
+app.use('/api/announcements', announcementsRouter);
 app.use('/api/chat', chatHandler)
 
 let port = Number(process.env.PORT) || 8080;

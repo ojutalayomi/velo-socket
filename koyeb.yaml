@@ -41,6 +41,10 @@ services:
       - key: ALLOWED_URL_2
         secret: ALLOWED_URL_2
 
+      # Shared secret the web app sends to POST /api/announcements/broadcast
+      - key: SOCKET_BROADCAST_SECRET
+        secret: SOCKET_BROADCAST_SECRET
+
       # OpenRouter / AI
       - key: OPENROUTER_API_KEY
         secret: OPENROUTER_API_KEY
