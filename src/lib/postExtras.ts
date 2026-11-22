@@ -49,6 +49,49 @@ export function sanitizeLocation(input: unknown): PostLocation | null {
   return location;
 }
 
+/** Validates a location message's JSON content; returns the canonical JSON, or null if invalid. */
+export function canonicalLocationContent(content: unknown): string | null {
+  if (typeof content !== 'string') return null;
+  try {
+    const location = sanitizeLocation(JSON.parse(content));
+    return location ? JSON.stringify(location) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A shared Velo user. Only the id is taken from the sender; the rest is read from the account. */
+export type ContactData = { userId: string; name: string; username: string; displayPicture: string; verified: boolean };
+
+export function requestedContactId(content: unknown): string | null {
+  if (typeof content !== 'string') return null;
+  try {
+    const id = (JSON.parse(content) as { userId?: unknown })?.userId;
+    return typeof id === 'string' && /^[a-f\d]{24}$/i.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+export function contactContent(user: {
+  _id: { toString(): string };
+  name?: string;
+  firstname?: string;
+  lastname?: string;
+  username?: string;
+  displayPicture?: string;
+  verified?: boolean;
+}): string {
+  const data: ContactData = {
+    userId: user._id.toString(),
+    name: user.name || [user.firstname, user.lastname].filter(Boolean).join(' ').trim() || user.username || 'Velo user',
+    username: user.username ?? '',
+    displayPicture: user.displayPicture ?? '',
+    verified: Boolean(user.verified),
+  };
+  return JSON.stringify(data);
+}
+
 /** Validates a poll message's JSON content; returns the canonical JSON, or null if invalid. */
 export function canonicalPollContent(content: unknown): string | null {
   if (typeof content !== 'string') return null;
@@ -81,6 +124,22 @@ export function messageDisplayText(messageType: string | undefined, content: str
   if (!(content ?? '').trim()) {
     const label = ATTACHMENT_LABELS[messageType ?? ''];
     if (label) return label;
+  }
+  if (messageType === 'Location') {
+    try {
+      const location = sanitizeLocation(JSON.parse(content ?? ''));
+      if (location) return `📍 ${location.name}`;
+    } catch {
+      /* fall through */
+    }
+  }
+  if (messageType === 'Contact') {
+    try {
+      const name = (JSON.parse(content ?? '') as { name?: unknown })?.name;
+      if (typeof name === 'string' && name) return `👤 ${name}`;
+    } catch {
+      /* fall through */
+    }
   }
   if (messageType === 'Call') {
     const record = parseCallRecord(content);

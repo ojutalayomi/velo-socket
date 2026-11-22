@@ -32,3 +32,26 @@ test('empty attachment messages get a readable preview', () => {
   assert.equal(messageDisplayText('Image', undefined), '📷 Photo');
   assert.equal(messageDisplayText('Text', 'hello'), 'hello');
 });
+
+import { canonicalLocationContent, contactContent, requestedContactId } from '../../lib/postExtras.js';
+
+test('location messages are validated and previewed', () => {
+  assert.equal(canonicalLocationContent('not json'), null);
+  assert.equal(canonicalLocationContent(JSON.stringify({ name: '  ' })), null);
+  assert.equal(
+    canonicalLocationContent(JSON.stringify({ name: 'Lagos', lat: 6.5, lng: 3.3, extra: 'x' })),
+    JSON.stringify({ name: 'Lagos', lat: 6.5, lng: 3.3 })
+  );
+  // out-of-range coordinates are dropped, the place name is kept
+  assert.equal(canonicalLocationContent(JSON.stringify({ name: 'X', lat: 99, lng: 3 })), JSON.stringify({ name: 'X' }));
+  assert.equal(messageDisplayText('Location', JSON.stringify({ name: 'Lagos' })), '📍 Lagos');
+});
+
+test('a shared contact takes only the id from the sender', () => {
+  assert.equal(requestedContactId(JSON.stringify({ userId: '507f1f77bcf86cd799439011', name: 'Fake' })), '507f1f77bcf86cd799439011');
+  assert.equal(requestedContactId(JSON.stringify({ userId: 'nope' })), null);
+  assert.equal(requestedContactId('x'), null);
+  const content = contactContent({ _id: { toString: () => 'abc' }, firstname: 'Ada', lastname: 'L', username: 'ada', verified: true });
+  assert.deepEqual(JSON.parse(content), { userId: 'abc', name: 'Ada L', username: 'ada', displayPicture: '', verified: true });
+  assert.equal(messageDisplayText('Contact', content), '👤 Ada L');
+});

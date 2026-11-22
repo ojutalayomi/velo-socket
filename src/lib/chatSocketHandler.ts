@@ -1,5 +1,11 @@
 import { ObjectId } from "mongodb";
-import { canonicalPollContent, messageDisplayText } from './postExtras.js';
+import {
+  canonicalLocationContent,
+  canonicalPollContent,
+  contactContent,
+  messageDisplayText,
+  requestedContactId,
+} from './postExtras.js';
 import { offlineMessageManager } from "../offline-messages.js";
 import { io } from "../socket.js";
 import { MessageAttributes, AttachmentSchema, msgStatus, MessageType, MentionNotification } from "../types.js";
@@ -94,6 +100,27 @@ export const chatSocketHandler = async (
         data.content = canonical;
       }
 
+      // A shared location must be valid, and a shared contact is rebuilt from the real account.
+      if (data.messageType === 'Location' && !options.trustedSender) {
+        const canonical = canonicalLocationContent(data.content);
+        if (!canonical) {
+          io.to(`user:${senderId}`).emit('chatError', { error: 'That location is not valid' });
+          return;
+        }
+        data.content = canonical;
+      }
+      if (data.messageType === 'Contact' && !options.trustedSender && !options.forwarded) {
+        const contactId = requestedContactId(data.content);
+        const contactUser = contactId
+          ? await db.users().findOne({ _id: new ObjectId(contactId) })
+          : null;
+        if (!contactUser) {
+          io.to(`user:${senderId}`).emit('chatError', { error: 'That contact could not be found' });
+          return;
+        }
+        data.content = contactContent(contactUser);
+      }
+
       // Handle multiple file uploads (if attachments exist)
       // Forwarded messages arrive with their files already copied in storage.
       let attachmentsWithUrls: AttachmentSchema[] = options.preparedAttachments ?? [];
@@ -130,7 +157,11 @@ export const chatSocketHandler = async (
       // The type comes from the content and attachments, never from the client's claim. Only a
       // poll (validated above), a trusted sender or a forward may ask for a structured type.
       const requestedType =
-        options.trustedSender || options.forwarded || data.messageType === 'Poll'
+        options.trustedSender ||
+        options.forwarded ||
+        data.messageType === 'Poll' ||
+        data.messageType === 'Location' ||
+        data.messageType === 'Contact'
           ? data.messageType
           : data.messageType === 'Markdown'
             ? 'Markdown'
