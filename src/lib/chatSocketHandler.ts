@@ -19,6 +19,7 @@ import {
 } from "../notifications/groupMentions.js";
 import { replyAsAi } from "./groupAi.js";
 import { canSendMessage } from "./chatPermissions.js";
+import { deriveMessageType } from "./messageType.js";
 
 export const chatSocketHandler = async (
     data: MessageAttributes,
@@ -125,6 +126,20 @@ export const chatSocketHandler = async (
           }
         }
       }
+
+      // The type comes from the content and attachments, never from the client's claim. Only a
+      // poll (validated above), a trusted sender or a forward may ask for a structured type.
+      const requestedType =
+        options.trustedSender || options.forwarded || data.messageType === 'Poll'
+          ? data.messageType
+          : data.messageType === 'Markdown'
+            ? 'Markdown'
+            : 'Text';
+      data.messageType = deriveMessageType({
+        content: data.content,
+        attachments: attachmentsWithUrls,
+        requested: requestedType,
+      });
 
       // `@all` is decided here from the stored group, never from what the client claims.
       const everyoneAllowed = !options.trustedSender && !options.forwarded && mentionsEveryone(data.content) && canMentionEveryone({

@@ -60,6 +60,14 @@ export function canonicalPollContent(content: unknown): string | null {
   }
 }
 
+const ATTACHMENT_LABELS: Record<string, string> = {
+  Image: '📷 Photo',
+  Video: '🎥 Video',
+  Audio: '🎵 Audio',
+  VoiceNote: '🎤 Voice message',
+  File: '📄 File',
+};
+
 /** Readable text for notifications/AI: poll messages store JSON, which should not be shown raw. */
 export function messageDisplayText(messageType: string | undefined, content: string | undefined): string {
   if (messageType === 'Poll') {
@@ -69,6 +77,10 @@ export function messageDisplayText(messageType: string | undefined, content: str
     } catch {
       /* fall through to raw content */
     }
+  }
+  if (!(content ?? '').trim()) {
+    const label = ATTACHMENT_LABELS[messageType ?? ''];
+    if (label) return label;
   }
   if (messageType === 'Call') {
     const record = parseCallRecord(content);
