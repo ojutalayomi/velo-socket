@@ -60,6 +60,37 @@ export function canonicalLocationContent(content: unknown): string | null {
   }
 }
 
+/** KLIPY media is shown straight from its own hosts; anything else is not accepted as a GIF or sticker. */
+const KLIPY_URL = /^https:\/\/([a-z0-9-]+\.)*klipy\.com\//i;
+export const isKlipyUrl = (value: unknown): value is string =>
+  typeof value === 'string' && value.length <= 2000 && KLIPY_URL.test(value);
+
+/**
+ * Validates a GIF / sticker message's JSON content. URLs are kept exactly as KLIPY returned them
+ * (its terms forbid rewriting them); only the shape and the host are checked.
+ */
+export function canonicalKlipyContent(content: unknown): string | null {
+  if (typeof content !== 'string' || content.length > 6000) return null;
+  try {
+    const raw = JSON.parse(content) as Record<string, unknown>;
+    if (!isKlipyUrl(raw.url)) return null;
+    if (raw.previewUrl !== undefined && !isKlipyUrl(raw.previewUrl)) return null;
+    const dimension = (value: unknown) =>
+      typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 4000 ? Math.round(value) : undefined;
+    return JSON.stringify({
+      provider: 'klipy',
+      slug: typeof raw.slug === 'string' ? raw.slug.slice(0, 200) : '',
+      title: typeof raw.title === 'string' ? raw.title.slice(0, 200) : '',
+      url: raw.url,
+      ...(raw.previewUrl ? { previewUrl: raw.previewUrl } : {}),
+      width: dimension(raw.width),
+      height: dimension(raw.height),
+    });
+  } catch {
+    return null;
+  }
+}
+
 /** A shared Velo user. Only the id is taken from the sender; the rest is read from the account. */
 export type ContactData = { userId: string; name: string; username: string; displayPicture: string; verified: boolean };
 
@@ -125,6 +156,8 @@ export function messageDisplayText(messageType: string | undefined, content: str
     const label = ATTACHMENT_LABELS[messageType ?? ''];
     if (label) return label;
   }
+  if (messageType === 'AnimatedGIF') return '🎞 GIF';
+  if (messageType === 'Sticker') return '🏷 Sticker';
   if (messageType === 'Location') {
     try {
       const location = sanitizeLocation(JSON.parse(content ?? ''));

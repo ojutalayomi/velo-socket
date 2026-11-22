@@ -1,5 +1,6 @@
 import { ObjectId } from "mongodb";
 import {
+  canonicalKlipyContent,
   canonicalLocationContent,
   canonicalPollContent,
   contactContent,
@@ -100,6 +101,16 @@ export const chatSocketHandler = async (
         data.content = canonical;
       }
 
+      // GIFs and stickers come from KLIPY; only its own URLs are accepted.
+      if ((data.messageType === 'AnimatedGIF' || data.messageType === 'Sticker') && !options.trustedSender && !options.forwarded) {
+        const canonical = canonicalKlipyContent(data.content);
+        if (!canonical) {
+          io.to(`user:${senderId}`).emit('chatError', { error: 'That GIF or sticker is not valid' });
+          return;
+        }
+        data.content = canonical;
+      }
+
       // A shared location must be valid, and a shared contact is rebuilt from the real account.
       if (data.messageType === 'Location' && !options.trustedSender) {
         const canonical = canonicalLocationContent(data.content);
@@ -161,6 +172,8 @@ export const chatSocketHandler = async (
         options.forwarded ||
         data.messageType === 'Poll' ||
         data.messageType === 'Location' ||
+        data.messageType === 'AnimatedGIF' ||
+        data.messageType === 'Sticker' ||
         data.messageType === 'Contact'
           ? data.messageType
           : data.messageType === 'Markdown'

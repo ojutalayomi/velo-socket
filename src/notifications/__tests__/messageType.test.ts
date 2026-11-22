@@ -55,3 +55,27 @@ test('a shared contact takes only the id from the sender', () => {
   assert.deepEqual(JSON.parse(content), { userId: 'abc', name: 'Ada L', username: 'ada', displayPicture: '', verified: true });
   assert.equal(messageDisplayText('Contact', content), '👤 Ada L');
 });
+
+import { canonicalKlipyContent } from '../../lib/postExtras.js';
+
+test('GIFs and stickers must point at KLIPY hosts, and their URLs are kept as given', () => {
+  const good = { slug: 's', title: 'Hi', url: 'https://static.klipy.com/a/b.webp?x=1&y=2', previewUrl: 'https://static1.klipy.com/c.webp', width: 320, height: 240 };
+  const out = JSON.parse(canonicalKlipyContent(JSON.stringify(good)) as string);
+  assert.equal(out.url, good.url);
+  assert.equal(out.provider, 'klipy');
+  assert.equal(out.width, 320);
+
+  for (const url of [
+    'http://static.klipy.com/a.gif',
+    'https://evil.com/a.gif',
+    'https://klipy.com.evil.com/a.gif',
+    'https://evilklipy.com/a.gif',
+    'javascript:alert(1)',
+  ]) {
+    assert.equal(canonicalKlipyContent(JSON.stringify({ ...good, url })), null, url);
+  }
+  assert.equal(canonicalKlipyContent(JSON.stringify({ ...good, previewUrl: 'https://evil.com/p.png' })), null);
+  assert.equal(canonicalKlipyContent('nope'), null);
+  assert.equal(messageDisplayText('AnimatedGIF', 'x'), '🎞 GIF');
+  assert.equal(messageDisplayText('Sticker', 'x'), '🏷 Sticker');
+});
