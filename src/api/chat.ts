@@ -8,6 +8,7 @@ import { io } from '../socket.js';
 import { ObjectId } from 'mongodb';
 import { SocialMediaUser } from '../lib/User.js';
 import { aiModel, openRouter } from '../lib/openRouter.js';
+import { userIdFromBearer } from '../lib/socketAuth.js';
 
 const router = Router();
 
@@ -36,6 +37,22 @@ const toOpenRouterMessage = (message: MessageAttributes, humanUserId: string) =>
 const chatHandler: RequestHandler = async (req, res) => {
   let bot: SocialMediaUser | null = null;
   try {
+    // Without this anyone could post into a bot chat as any user, and use the AI for free.
+    if (!process.env.SOCKET_AUTH_SECRET) {
+      res.status(503).json({ error: 'Chat endpoint not configured' });
+      return;
+    }
+    const callerId = userIdFromBearer(req.headers.authorization);
+    if (!callerId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const sent = req.body?.messages;
+    if (!Array.isArray(sent) || sent.length === 0 || sent[sent.length - 1]?.sender?.id !== callerId) {
+      res.status(403).json({ error: 'You can only send messages as yourself' });
+      return;
+    }
+
     if (!req.body.messages[req.body.messages.length - 1].receiverId) {
       console.error("Receiver ID is missing in the last message.");
       res.status(400).json({ error: "Receiver ID is missing in the last message." });
@@ -48,7 +65,8 @@ const chatHandler: RequestHandler = async (req, res) => {
       await db.users().findOne({ _id: new ObjectId(req.body.messages[req.body.messages.length - 1].receiverId) }) as UserSchema
     );
 
-    if (bot.isUserNull()) {
+    // The reply is posted as the receiver, so the receiver must really be a bot.
+    if (bot.isUserNull() || bot.accountType !== 'bot') {
       console.error("Bot user not found.");
       res.status(400).json({ error: "Bot user not found." });
       return;
@@ -88,7 +106,7 @@ const chatHandler: RequestHandler = async (req, res) => {
 
     io.to(lastUserMessage.receiverId).emit('userStopTyping', { data: bot?.getClientSafeData(), to: bot?._id.toString() });
 
-    void chatSocketHandler(lastUserMessage, db).catch(err => console.error("Error handling user message in chatSocketHandler:", err));
+    void chatSocketHandler(lastUserMessage, db, callerId).catch(err => console.error("Error handling user message in chatSocketHandler:", err));
     void chatSocketHandler(botResponse.toMessageAttributes(), db).catch(err => console.error("Error handling bot response in chatSocketHandler:", err));
     res.json({ result: botResponse.toMessageAttributes(), reply: botResponse.content });
     return;

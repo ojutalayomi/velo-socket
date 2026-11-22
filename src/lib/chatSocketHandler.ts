@@ -26,6 +26,7 @@ import {
 } from "../notifications/groupMentions.js";
 import { replyAsAi } from "./groupAi.js";
 import { canSendMessage } from "./chatPermissions.js";
+import { senderFromAccount } from "./senderProfile.js";
 import { deriveMessageType } from "./messageType.js";
 
 export const chatSocketHandler = async (
@@ -57,6 +58,23 @@ export const chatSocketHandler = async (
         console.warn(`chatMessage rejected; ${senderId} is not in chat ${data.chatId}`);
         io.to(`user:${senderId}`).emit('chatError', { error: 'You are not a member of this chat' });
         return;
+      }
+
+      // Who sent it is decided by the connection, not by the payload: a client must not be able to
+      // post as someone else or borrow their name, picture or verified badge. The AI bot (trusted)
+      // supplies its own sender.
+      if (authenticatedSenderId && !options.trustedSender) {
+        const account = ObjectId.isValid(authenticatedSenderId)
+          ? await db.users().findOne(
+              { _id: new ObjectId(authenticatedSenderId) },
+              { projection: { name: 1, firstname: 1, lastname: 1, username: 1, displayPicture: 1, verified: 1 } }
+            )
+          : null;
+        if (!account) {
+          io.to(`user:${senderId}`).emit('chatError', { error: 'Your account could not be found' });
+          return;
+        }
+        data.sender = senderFromAccount(authenticatedSenderId, account);
       }
 
       // A retry of a message that was already saved (same id) must not repeat any side effects.

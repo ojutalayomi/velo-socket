@@ -3,6 +3,7 @@ import { Server, Socket } from 'socket.io';
 import { corsOptions } from './server.js';
 import { server } from './server.js';
 import { getMongoDb } from './mongodb.js';
+import { socketAuthEnforced, verifySocketToken } from './lib/socketAuth.js';
 
 
 export const io = new Server(server, {
@@ -21,6 +22,16 @@ export type UserSocket = Socket & { userId?: string; };
 io.use(async (socket: UserSocket, next) => {
   const token = socket.handshake.query.userId;
   if (!token) {
+    return next(new Error('Authentication error'));
+  }
+  // The query's userId is only a claim. A signed token from the web app proves it; once clients
+  // send one, SOCKET_AUTH_ENFORCE=true makes it mandatory.
+  const proof = socket.handshake.auth?.token;
+  if (proof) {
+    if (verifySocketToken(proof, process.env.SOCKET_AUTH_SECRET) !== token.toString()) {
+      return next(new Error('Authentication error'));
+    }
+  } else if (socketAuthEnforced()) {
     return next(new Error('Authentication error'));
   }
   try {
