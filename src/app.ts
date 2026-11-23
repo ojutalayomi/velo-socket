@@ -141,17 +141,21 @@ io.on('connection', async (socket: UserSocket) => {
     socket.removeAllListeners();
   });
 
-  // Legacy events kept for compatibility
+  // Legacy events kept for compatibility. None of them may reach a room the sender has not
+  // joined: `group:` rooms are only joined after a membership check (joinChat).
+  const inGroupRoom = (room: unknown): room is string =>
+    typeof room === 'string' && socket.rooms.has(`group:${room}`);
+
   socket.on('offer', (data) => {
-    const { room, offer } = data;
+    const { room, offer } = data ?? {};
+    if (!inGroupRoom(room)) return;
     io.to(`group:${room}`).emit('offer', {offer, room});
-  // console.log('offer: ' + data)
   });
 
   socket.on('callOffer', (data) => {
-    const { room, offer } = data;
+    const { room, offer } = data ?? {};
+    if (!inGroupRoom(room)) return;
     io.to(`group:${room}`).emit('offer', {offer, room});
-  // console.log('callOffer: ' + data)
   });
 
   socket.on('join-room', async (roomId) => {
@@ -160,6 +164,13 @@ io.on('connection', async (socket: UserSocket) => {
 
     if (typeof roomId !== 'string') {
       console.error('Invalid roomId type:', typeof roomId, 'value:', roomId);
+      return;
+    }
+
+    // These prefixes are private rooms (a user's own events, a chat's members, a call's
+    // participants). Joining one by name would let anyone listen in on it.
+    if (/^(user|group|callu):/.test(roomId)) {
+      console.warn(`join-room rejected for reserved room ${roomId} (user ${userId})`);
       return;
     }
 
@@ -182,31 +193,32 @@ io.on('connection', async (socket: UserSocket) => {
   });
 
   socket.on('hangup', (room) => {
+    if (!inGroupRoom(room)) return;
     io.to(`group:${room}`).emit('remote-hangup', room)
   })
 
   socket.on('user-joined', (payload) => {
     const room = typeof payload === 'string' ? payload : (payload && payload.room);
-    if (!room) return;
+    if (!inGroupRoom(room)) return;
     io.to(`group:${room}`).emit('user-joined', room)
   })
 
   socket.on('answer', (data) => {
-    const { room, answer } = data;
+    const { room, answer } = data ?? {};
+    if (!inGroupRoom(room)) return;
     io.to(`group:${room}`).emit('answer', answer);
-  // console.log('answer: ' + data)
   });
 
   socket.on('candidate', (data) => {
-    const { room, candidate } = data;
+    const { room, candidate } = data ?? {};
+    if (!inGroupRoom(room)) return;
     io.to(`group:${room}`).emit('candidate', candidate);
-  // console.log('candidate: ' + data)
   });
 
   // New: call hangup broadcast
   socket.on('call:hangup', (data: { room: string }) => {
     const { room } = data || ({} as any);
-    if (!room) return;
+    if (!inGroupRoom(room)) return;
     io.to(`group:${room}`).emit('call:hangup', { room });
   });
 
@@ -275,17 +287,21 @@ io.on('connection', async (socket: UserSocket) => {
     console.error('Socket error:', error);
   });
 
-  socket.on('subscribeToUser', async (userId: string) => {
-    socket.join(`user:${userId}`);
-    const isOnline = await isUserOnline(redis, userId);
-    const visible = (await getPrivacy(userId)).showOnlineStatus;
-    io.emit('userStatus', { userId, status: isOnline && visible ? 'online' : 'offline' });
+  // `user:<id>` is that user's private channel (messages, notifications, call invites), so a
+  // connection may only ever be in its own. Asking about someone else just gets their status.
+  socket.on('subscribeToUser', async (subjectId: string) => {
+    if (typeof subjectId !== 'string' || !subjectId) return;
+    if (subjectId === userId) socket.join(`user:${userId}`);
+    const isOnline = await isUserOnline(redis, subjectId);
+    const visible = (await getPrivacy(subjectId)).showOnlineStatus;
+    socket.emit('userStatus', { userId: subjectId, status: isOnline && visible ? 'online' : 'offline' });
   });
 
+  // Answers only the asker, and only about a room it is in.
   socket.on('getRoomMembers', (chatId: string) => {
+    if (typeof chatId !== 'string' || !socket.rooms.has(chatId)) return;
     const room = io.sockets.adapter.rooms.get(chatId);
-    const members = room ? Array.from(room) : [];
-    io.emit('roomMembers', { chatId, members });
+    socket.emit('roomMembers', { chatId, members: room ? Array.from(room) : [] });
   });
 });
 

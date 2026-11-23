@@ -846,6 +846,14 @@ io.on('connection', (socket) => {
                 });
             }
 
+            // Only the author may delete it.
+            if (String(post.UserId) !== userId) {
+                return io.to(`user:${userId}`).emit("delete_post_response", {
+                    message: "You can only delete your own posts!",
+                    success: false
+                });
+            }
+
             // Delete the post
             await PostsOrSharesOrComments.deleteOne({ PostID: data.postId });
             await db.collection('Posts_Likes').deleteMany({ OriginalPostId: data.postId }); 

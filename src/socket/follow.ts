@@ -23,6 +23,17 @@ function formatName(user: {
     return [user?.firstname, user?.lastname].filter(Boolean).join(' ').trim() || user?.username || 'Someone';
 }
 
+/**
+ * The follower as other people will see them. The client says who it is following; who it is
+ * comes from the connection and the database, so a forged name can't ride along in the toast.
+ */
+async function trustedFollowerDetails(db: MongoDBClient, followerId: string, claimed: any) {
+    const user = ObjectId.isValid(followerId)
+        ? await db.users().findOne({ _id: new ObjectId(followerId) }, { projection: { username: 1 } })
+        : null;
+    return { ...(claimed ?? {}), _id: followerId, username: user?.username ?? '' };
+}
+
 io.on('connection', async (socket) => {
     // Handle follow event
     socket.on('follow', async (data: { followedDetails: any, followerDetails: any, time: string }, ack?: () => void) => {
@@ -46,8 +57,8 @@ io.on('connection', async (socket) => {
             await offlineMessageManager.broadcastMessage({
                 type: 'followNotification',
                 data: {
-                    followedDetails: data.followedDetails,
-                    followerDetails: data.followerDetails,
+                    followedDetails: { ...data.followedDetails, _id: followedId },
+                    followerDetails: await trustedFollowerDetails(db, followerId, data.followerDetails),
                     timestamp: data.time,
                     following: true,
                 }
@@ -134,23 +145,34 @@ io.on('connection', async (socket) => {
     // Handle unfollow event
     socket.on('unfollow', async (data: { followedDetails: any, followerDetails: any, time: string }, ack?: () => void) => {
         try {
-            const { followedDetails, followerDetails, time } = data;
+            const { followedDetails, followerDetails, time } = data ?? ({} as typeof data);
             const followerId = socket.handshake.query.userId as string;
-            const followedId = String(followedDetails._id);
+            const followedId = followedDetails?._id ? String(followedDetails._id) : '';
+
+            if (!followerId || !followedId || followerId === followedId) {
+                ack?.();
+                return;
+            }
+
+            // Only announce an unfollow that really happened: the follow row is already gone.
+            const db = await new MongoDBClient().init();
+            if (await db.followers().findOne({ followerId, followedId })) {
+                ack?.();
+                return;
+            }
 
             await offlineMessageManager.broadcastMessage({
                 type: 'followNotification',
                 data: {
-                    followedDetails,
-                    followerDetails,
+                    followedDetails: { ...followedDetails, _id: followedId },
+                    followerDetails: await trustedFollowerDetails(db, followerId, followerDetails),
                     timestamp: time,
                     following: false,
                 }
-            }, undefined, [followedId, followerId || String(followerDetails._id)]);
+            }, undefined, [followedId, followerId]);
 
-            if (followerId && followedId) {
+            {
                 try {
-                    const db = await new MongoDBClient().init();
                     await removeNotification(db, buildFollowDedupeKey(followedId, followerId));
                 } catch (error) {
                     console.error('Error removing follow notification:', error);

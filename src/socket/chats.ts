@@ -96,14 +96,28 @@ io.on('connection', async (socket: UserSocket) => {
       }
     });
 
-    socket.on('addReaction', async (data: Reaction) => {
+    // The reaction belongs to the authenticated socket user, whatever `userId` the client wrote,
+    // and only members of the message's chat may react to it.
+    socket.on('addReaction', async (incoming: Reaction) => {
       try {
-        const message = await db.chatMessages().findOne({ _id: new ObjectId(data.messageId) });
-        if (!message) {
-          io.to(`user:${data.userId}`).emit('chatError', { error: 'Message not found' });
+        if (
+          !incoming ||
+          typeof incoming.messageId !== 'string' ||
+          !ObjectId.isValid(incoming.messageId) ||
+          typeof incoming.reaction !== 'string' ||
+          incoming.reaction.length === 0 ||
+          incoming.reaction.length > 32
+        ) {
+          socket.emit('chatError', { error: 'That reaction is not valid' });
           return;
         }
-        console.log(message);
+        const message = await db.chatMessages().findOne({ _id: new ObjectId(incoming.messageId) });
+        if (!message || !(await isChatParticipant(message.chatId, userId))) {
+          // The same answer for a missing message and one in a chat the user is not in.
+          io.to(`user:${userId}`).emit('chatError', { error: 'Message not found' });
+          return;
+        }
+        const data: Reaction = { ...incoming, userId };
         // Check if user already reacted
         const existingReaction = await db.chatReactions().findOne({
           messageId: message._id.toString(),
@@ -156,7 +170,7 @@ io.on('connection', async (socket: UserSocket) => {
         }
       } catch (error) {
         console.error('Error in addReaction:', error);
-        io.to(`user:${data.userId}`).emit('chatError', { error: 'Failed to process reaction' });
+        io.to(`user:${userId}`).emit('chatError', { error: 'Failed to process reaction' });
       }
     });
 
@@ -406,11 +420,32 @@ io.on('connection', async (socket: UserSocket) => {
       }
     });
 
+    // Typing is only relayed inside a chat the sender is in, and always as the sender: a client
+    // can neither type "as" someone else nor aim the indicator at a room it does not belong to.
+    const typingMembers = new Map<string, number>();
+    const isTypingMember = async (chatId: string, memberId: string) => {
+      const key = `${chatId}:${memberId}`;
+      const until = typingMembers.get(key);
+      if (until && until > Date.now()) return true;
+      if (!(await isChatParticipant(chatId, memberId))) return false;
+      typingMembers.set(key, Date.now() + 30_000);
+      return true;
+    };
+    const typingEvent = async (data: { user?: Partial<UserSchema>; to?: unknown; chatId?: unknown }) => {
+      const to = typeof data?.to === 'string' ? data.to : '';
+      const chatId = to.startsWith('group:') ? to.slice('group:'.length) : typeof data?.chatId === 'string' ? data.chatId : '';
+      if (!ObjectId.isValid(chatId) || !(to.startsWith('group:') || to.startsWith('user:'))) return null;
+      if (!(await isTypingMember(chatId, userId))) return null;
+      if (to.startsWith('user:') && !(await isTypingMember(chatId, to.slice('user:'.length)))) return null;
+      return { ...data, to, user: { ...data.user, _id: userId } };
+    };
+
     socket.on('typing', async (data: { user: Partial<UserSchema>, to: string }) => {
       try {
         // Respect "Show typing status": a user who turned it off never reveals typing.
         if (!(await getPrivacy(userId)).showTypingStatus) return;
-        io.to(data.to).emit('userTyping', data);
+        const relay = await typingEvent(data);
+        if (relay) io.to(relay.to).emit('userTyping', relay);
       } catch (error) {
         console.error('Error in typing event:', error);
       }
@@ -419,7 +454,8 @@ io.on('connection', async (socket: UserSocket) => {
     socket.on('stopTyping', async (data: { user: Partial<UserSchema>, to: string }) => {
       try {
         if (!(await getPrivacy(userId)).showTypingStatus) return;
-        io.to(data.to).emit('userStopTyping', data);
+        const relay = await typingEvent(data);
+        if (relay) io.to(relay.to).emit('userStopTyping', relay);
       } catch (error) {
         console.error('Error in stopTyping event:', error);
       }
