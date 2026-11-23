@@ -8,7 +8,7 @@ import { ChatMessage } from './ChatMessage.js';
 import { buildAiContext, buildGroupContext, type GroupFacts } from './aiContext.js';
 import { nextAttempt, readReply } from './aiReply.js';
 import { aiFallbackModel, aiModel, openRouter } from './openRouter.js';
-
+import { withSenders } from './messageSender.js';
 const CONTEXT_MESSAGES = 20;
 /**
  * Room for the answer plus any hidden reasoning: reasoning models spend this budget thinking first,
@@ -103,7 +103,9 @@ export async function replyAsAi(params: GroupAiParams): Promise<void> {
       .find({ chatId })
       .sort({ timestamp: -1 })
       .limit(CONTEXT_MESSAGES)
-      .toArray();
+      .toArray()
+      // Messages store only the sender's id; the model needs names to tell people apart.
+      .then((rows) => withSenders(db, rows));
 
     const facts = await loadGroupFacts(db, chatId, trigger).catch((error) => {
       console.error('[ai] Could not load group details:', error);

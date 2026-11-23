@@ -168,6 +168,12 @@ io.on('connection', async (socket: UserSocket) => {
             await offlineMessageManager.broadcastMessage({ type: 'reactionAdded', data }, undefined, targets);
           }
         }
+        // Reactions live in their own collection, so mark the message itself as changed;
+        // clients syncing "since" a timestamp would otherwise never see a reaction change.
+        await db.chatMessages().updateOne(
+          { _id: message._id },
+          { $set: { updatedAt: new Date().toISOString() } }
+        );
       } catch (error) {
         console.error('Error in addReaction:', error);
         io.to(`user:${userId}`).emit('chatError', { error: 'Failed to process reaction' });
@@ -301,7 +307,7 @@ io.on('connection', async (socket: UserSocket) => {
             const placeholder = deletion === 'admin' ? ADMIN_DELETED_CONTENT : SENDER_DELETED_CONTENT;
             await db.chatMessages().updateOne(
               { _id: messageId },
-              { $set: { content: placeholder, attachments: [], mentions: [], messageType: 'Text' as MessageType } }
+              { $set: { content: placeholder, attachments: [], mentions: [], messageType: 'Text' as MessageType, updatedAt: new Date().toISOString() } }
             );
             await db.readReceipts().deleteMany({ messageId: messageId.toString() });
             if (message.attachments && message.attachments.length > 0) {

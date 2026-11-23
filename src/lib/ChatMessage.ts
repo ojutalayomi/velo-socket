@@ -12,6 +12,8 @@ export class ChatMessage implements MessageSchema {
     public receiverId: string;
     public content: string; // This is the field we want to populate
     public timestamp: string;
+    /** Server clock at insert; later bumped on delete/reaction changes. Drives `since` syncs. */
+    public updatedAt?: string;
     public messageType: MessageType;
     public isRead: Record<string, boolean>;
     public chatType: ChatType;

@@ -26,7 +26,7 @@ import {
 } from "../notifications/groupMentions.js";
 import { replyAsAi } from "./groupAi.js";
 import { canSendMessage } from "./chatPermissions.js";
-import { senderFromAccount } from "./senderProfile.js";
+import { senderFromAccount, storedSender } from "./senderProfile.js";
 import { deriveMessageType } from "./messageType.js";
 
 export const chatSocketHandler = async (
@@ -360,7 +360,8 @@ export const chatSocketHandler = async (
       }
 
       try {
-        await db.chatMessages().insertOne(message);
+        // Only the sender's id is stored; their name, picture and badge are read from the account.
+        await db.chatMessages().insertOne({ ...message, sender: storedSender(message.sender), updatedAt: new Date().toISOString() } as typeof message);
       } catch (error) {
         // The same message id arriving twice is a retry of one already saved; do nothing.
         if ((error as { code?: number })?.code === 11000) {

@@ -413,6 +413,8 @@ export interface Message {
   receiverId: string;
   content: string;
   timestamp: string;
+  /** Set when the message is deleted/edited or its reactions change; drives `since` syncs. */
+  updatedAt?: string;
   isRead?: { [participantId: string]: boolean }; // Object with participant IDs as keys and their read status as values
   chatType: ChatType;
   messageType: MessageType;
