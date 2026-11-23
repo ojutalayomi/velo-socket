@@ -352,6 +352,12 @@ server.listen(port, () => {
   console.error('Server error ->', error.message);
 });
 
+// A Redis outage rejects in-flight commands (MaxRetriesPerRequestError). Those come from async
+// socket handlers with no catch, and Node 22 would kill the whole server on them.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason instanceof Error ? `${reason.name}: ${reason.message}` : reason);
+});
+
 process.on('SIGINT', () => {
   console.log('\nSIGINT received. Closing HTTP server...');
   server.close(() => {
