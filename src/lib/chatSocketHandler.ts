@@ -28,6 +28,7 @@ import { replyAsAi } from "./groupAi.js";
 import { canSendMessage } from "./chatPermissions.js";
 import { senderFromAccount, storedSender } from "./senderProfile.js";
 import { deriveMessageType } from "./messageType.js";
+import { unreadIncrement } from "./unreadCounts.js";
 
 export const chatSocketHandler = async (
     data: MessageAttributes,
@@ -266,7 +267,7 @@ export const chatSocketHandler = async (
                 lastUpdated: new Date().toISOString()
               },
               $inc: {
-                unreadCount: 1
+                unreadCount: unreadIncrement(participant.userId, senderId)
               }
             }
           }
@@ -299,7 +300,7 @@ export const chatSocketHandler = async (
                       lastUpdated: new Date().toISOString()
                     },
                     $inc: {
-                      unreadCount: 1
+                      unreadCount: unreadIncrement(participant.userId, senderId)
                     }
                   }
                 );
@@ -323,7 +324,7 @@ export const chatSocketHandler = async (
                         lastUpdated: new Date().toISOString()
                       },
                       $inc: {
-                        unreadCount: 1
+                        unreadCount: unreadIncrement(participant.userId, senderId)
                       }
                     }
                   );
