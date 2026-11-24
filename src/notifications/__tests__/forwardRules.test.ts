@@ -33,3 +33,12 @@ test('deleted and empty messages are not forwardable', () => {
   assert.equal(isForwardable({ content: '   ', attachmentCount: 0 }), false);
   assert.equal(isForwardable({ attachmentCount: 0 }), false);
 });
+
+test('calls, polls and announcements are not forwardable, other types are', () => {
+  for (const messageType of ['Call', 'Poll', 'PollResponse', 'PollEnd', 'PollResult', 'Announcement']) {
+    assert.equal(isForwardable({ content: 'x', attachmentCount: 0, messageType }), false, messageType);
+  }
+  for (const messageType of ['Text', 'Markdown', 'Image', 'VoiceNote', 'Location', 'Contact', 'Sticker', 'AnimatedGIF', 'Link']) {
+    assert.equal(isForwardable({ content: 'x', attachmentCount: 0, messageType }), true, messageType);
+  }
+});

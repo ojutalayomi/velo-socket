@@ -35,8 +35,15 @@ export function parseForwardRequest(
   return { ok: true, messageIds, chatIds };
 }
 
-/** A deleted message, or one with nothing left to show, is never forwarded. */
-export function isForwardable(message: { content?: string; attachmentCount: number }): boolean {
+/**
+ * Message types that only make sense in the chat they were sent in: a call record, a poll (and the
+ * votes and results that belong to it), a chat announcement. Everything else can be forwarded.
+ */
+export const NON_FORWARDABLE_TYPES = ['Call', 'Poll', 'PollResponse', 'PollEnd', 'PollResult', 'Announcement'];
+
+/** A deleted message, one with nothing left to show, or one of the types above is never forwarded. */
+export function isForwardable(message: { content?: string; attachmentCount: number; messageType?: string }): boolean {
+  if (message.messageType && NON_FORWARDABLE_TYPES.includes(message.messageType)) return false;
   const content = message.content ?? '';
   if (content.endsWith(DELETED_MARKER)) return false;
   return content.trim().length > 0 || message.attachmentCount > 0;

@@ -64,7 +64,7 @@ export async function forwardMessages(db: MongoDBClient, userId: string, payload
   if (memberOf.length !== sourceChatIds.length) return { ok: false, error: 'You cannot forward these messages' };
 
   const forwardable = sources
-    .filter((m) => isForwardable({ content: m.content, attachmentCount: m.attachments?.length ?? 0 }))
+    .filter((m) => isForwardable({ content: m.content, attachmentCount: m.attachments?.length ?? 0, messageType: m.messageType }))
     .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   if (forwardable.length === 0) return { ok: false, error: 'These messages cannot be forwarded' };
 
