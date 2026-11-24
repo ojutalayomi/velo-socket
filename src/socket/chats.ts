@@ -5,6 +5,7 @@ import { MongoDBClient } from "../mongodb.js";
 import { io, UserSocket } from '../socket.js';
 import { offlineMessageManager } from '../offline-messages.js';
 import { chatSocketHandler } from "../lib/chatSocketHandler.js";
+import { announceMessage } from "../lib/announceMessage.js";
 import { forwardMessages } from "../lib/forwardMessages.js";
 import { isChatParticipant } from '../utils.js';
 import { getPrivacy } from '../privacy.js';
@@ -415,6 +416,16 @@ io.on('connection', async (socket: UserSocket) => {
       // keeps running after the caller disconnects; failures reach the sender as 'chatError'.
       ack?.();
       await chatSocketHandler(data, db, userId);
+    });
+
+    // The web API saved a group notice and asks for it to be delivered to the members.
+    socket.on('chat:announce', async (data: { messageId?: unknown }, ack?: () => void) => {
+      try {
+        await announceMessage(db, userId, data?.messageId);
+      } catch (error) {
+        console.error('Error in chat:announce event:', error);
+      }
+      ack?.();
     });
 
     socket.on('forwardMessages', async (data: unknown, ack?: (result: unknown) => void) => {
