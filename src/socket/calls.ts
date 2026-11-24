@@ -7,6 +7,7 @@ import { loadNotificationPreferences } from '../notifications/settings.js';
 import { filterOnlineUsers } from '../presence.js';
 import { deliverPush, sendSilentClose } from '../push.js';
 import { isChatParticipant } from '../utils.js';
+import { canSendMessage } from '../lib/chatPermissions.js';
 import { buildCallRecord } from '../lib/callRecord.js';
 import { chatSocketHandler } from '../lib/chatSocketHandler.js';
 
@@ -292,6 +293,20 @@ export const handleCallInvite = async (
     console.warn(`call:invite rejected; ${targets.join(' or ')} is not in chat ${roomId}`);
     socket.emit('chatError', { error: 'You are not a participant of this chat' });
     return;
+  }
+
+  // In an admin-only group, members cannot start calls either (they can still join a live one).
+  if (chatType === 'Group' && ObjectId.isValid(roomId)) {
+    const db = await new MongoDBClient().init();
+    const group = await db.chats().findOne(
+      { _id: new ObjectId(roomId) },
+      { projection: { chatType: 1, adminIds: 1, onlyAdminsCanSend: 1 } }
+    );
+    const live = Array.from(activeCalls.values()).some((c) => c.chatType === 'Group' && c.roomId === roomId);
+    if (group && !live && !canSendMessage({ ...group, userId: callerId })) {
+      socket.emit('chatError', { error: 'Only admins can start calls in this group' });
+      return;
+    }
   }
 
   // One call at a time per person, on either end.
