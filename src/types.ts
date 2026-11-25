@@ -437,6 +437,12 @@ export interface Message {
   forwarded?: boolean;
   /** Set on replies to someone's status; always built by the server from the status itself. */
   statusReply?: StatusReplyPreview;
+  /** Photo, video or voice note that can be opened once per recipient; its file is never in the payload. */
+  viewOnce?: boolean;
+  /** Ids of the people who have opened it. */
+  viewOnceOpenedBy?: string[];
+  /** The file has been deleted (everyone opened it, or 24 hours passed). */
+  viewOnceGone?: boolean;
 }
 
 /** What a reply to a status shows above it in the chat: a snapshot of the status. */

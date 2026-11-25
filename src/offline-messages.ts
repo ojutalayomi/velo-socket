@@ -29,6 +29,7 @@ export interface OfflineMessage {
     | 'statusCreated'
     | 'statusDeleted'
     | 'pinnedMessagesUpdated'
+    | 'viewOnceUpdated'
     | 'mentionNotification';
   userId: string;
   data: any;

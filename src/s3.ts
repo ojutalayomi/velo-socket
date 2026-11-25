@@ -1,4 +1,5 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, CopyObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import multer from 'multer';
 import multerS3 from 'multer-s3';
 
@@ -20,12 +21,20 @@ const s3Client = new S3Client({
  * @param contentType - The content type of the file
  * @returns The URL of the uploaded file
  */
-export async function uploadFileToS3(BUCKET_NAME: string, file: Buffer, fileKey: string, contentType: string) {
+export async function uploadFileToS3(
+  BUCKET_NAME: string,
+  file: Buffer,
+  fileKey: string,
+  contentType: string,
+  options: { noStore?: boolean } = {}
+) {
   const params = {
     Bucket: BUCKET_NAME,
     Key: fileKey,
     Body: file,
     ContentType: contentType,
+    // View once files must never be kept by a browser or CDN cache.
+    ...(options.noStore ? { CacheControl: 'no-store' } : {}),
   };
 
   const command = new PutObjectCommand(params);
@@ -82,3 +91,15 @@ const postUpload = multer({
     }
   })
 });
+
+/**
+ * A link that opens one object for a short time only.
+ * @param seconds - How long the link works
+ */
+export async function presignGetUrl(BUCKET_NAME: string, fileKey: string, seconds: number) {
+  return getSignedUrl(
+    s3Client,
+    new GetObjectCommand({ Bucket: BUCKET_NAME, Key: fileKey, ResponseCacheControl: 'no-store' }),
+    { expiresIn: seconds }
+  );
+}

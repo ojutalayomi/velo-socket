@@ -7,6 +7,7 @@ import { offlineMessageManager } from '../offline-messages.js';
 import { chatSocketHandler } from "../lib/chatSocketHandler.js";
 import { announceMessage } from "../lib/announceMessage.js";
 import { forwardMessages } from "../lib/forwardMessages.js";
+import { openViewOnce } from '../lib/viewOnce.js';
 import { pinMessage, removePinsForMessage, unpinMessage } from '../lib/pinnedMessages.js';
 import { isChatParticipant } from '../utils.js';
 import { getPrivacy } from '../privacy.js';
@@ -355,6 +356,21 @@ io.on('connection', async (socket: UserSocket) => {
       } catch (error) {
         console.error('Error in updateConversation:', error);
         socket.emit('chatError', { error: 'Failed to update conversation' });
+      }
+    });
+
+    // Open a view once photo, video or voice note. The answer is the only place its file link is ever
+    // given out: valid for about a minute, and only the first open by this person succeeds.
+    socket.on('openViewOnce', async (
+      data: { messageId?: string },
+      ack?: (result: { ok: boolean; error?: string; url?: string; expiresInSeconds?: number }) => void
+    ) => {
+      try {
+        const result = await openViewOnce(db, { userId, messageId: String(data?.messageId ?? '') });
+        ack?.(result);
+      } catch (error) {
+        console.error('Error in openViewOnce:', error);
+        ack?.({ ok: false, error: 'Something went wrong' });
       }
     });
 

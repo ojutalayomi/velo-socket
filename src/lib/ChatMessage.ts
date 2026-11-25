@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 
 import { MongoDBClient } from "../mongodb.js";
+import { payloadAttachments, viewOnceDeleteAt } from "./viewOnceRules.js";
 import { Attachment, ChatType, Mention, MessageAttributes, MessageSchema, MessageType, msgStatus, Reaction, StatusReplyPreview } from "../types.js";
 
 /**
@@ -25,6 +26,11 @@ export class ChatMessage implements MessageSchema {
     public mentions: Mention[];
     public forwarded?: boolean;
     public statusReply?: StatusReplyPreview;
+    public viewOnce?: boolean;
+    /** Who opened it and when; the file is deleted once everyone has, or after `viewOnceDeleteAfter`. */
+    public viewOnceOpens?: Record<string, string>;
+    public viewOnceDeleteAfter?: string;
+    public viewOnceGone?: boolean;
   
     // constructor to force use of factory methods
     constructor(data: MessageAttributes) {
@@ -47,6 +53,11 @@ export class ChatMessage implements MessageSchema {
       this.mentions = data.mentions || [];
       if (data.forwarded) this.forwarded = true;
       if (data.statusReply) this.statusReply = data.statusReply;
+      if (data.viewOnce) {
+        this.viewOnce = true;
+        this.viewOnceOpens = {};
+        this.viewOnceDeleteAfter = viewOnceDeleteAt({ sentAt: this.timestamp }).toISOString();
+      }
     }
 
     public toMessageAttributes(attachments: Attachment[] = []): MessageAttributes {
@@ -60,13 +71,17 @@ export class ChatMessage implements MessageSchema {
             isRead: this.isRead,
             sender: this.sender,
             reactions: this.reactions,
-            attachments,
+            // A view once file is only ever handed out by `openViewOnce`, never in a message.
+            attachments: payloadAttachments(this.viewOnce, attachments),
             quotedMessageId: this.quotedMessageId,
             status: this.status,
             chatType: this.chatType,
             mentions: this.mentions,
             ...(this.forwarded ? { forwarded: true } : {}),
             ...(this.statusReply ? { statusReply: this.statusReply } : {}),
+            ...(this.viewOnce
+              ? { viewOnce: true, viewOnceOpenedBy: Object.keys(this.viewOnceOpens ?? {}), ...(this.viewOnceGone ? { viewOnceGone: true } : {}) }
+              : {}),
         };
     }
   

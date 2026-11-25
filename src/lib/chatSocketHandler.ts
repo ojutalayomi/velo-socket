@@ -30,6 +30,7 @@ import { senderFromAccount, storedSender } from "./senderProfile.js";
 import { deriveMessageType } from "./messageType.js";
 import { resolveStatusReply } from "./statusReply.js";
 import { unreadIncrement } from "./unreadCounts.js";
+import { viewOnceLabel, viewOnceRequestError } from "./viewOnceRules.js";
 
 export const chatSocketHandler = async (
     data: MessageAttributes,
@@ -152,6 +153,20 @@ export const chatSocketHandler = async (
         data.content = contactContent(contactUser);
       }
 
+      // View once is only for one photo, video or voice note from a person, never forwarded or from the bot.
+      const viewOnce = data.viewOnce === true && !options.trustedSender && !options.forwarded;
+      if (viewOnce) {
+        const problem = viewOnceRequestError({
+          attachmentCount: data.attachments?.length ?? 0,
+          mimeTypes: (data.attachments ?? []).map((a: { type?: string }) => String(a.type ?? '')),
+        });
+        if (problem) {
+          io.to(`user:${senderId}`).emit('chatError', { error: problem });
+          return;
+        }
+        data.content = ''; // no caption: the bubble must not reveal what the file is
+      }
+
       // Handle multiple file uploads (if attachments exist)
       // Forwarded messages arrive with their files already copied in storage.
       let attachmentsWithUrls: AttachmentSchema[] = options.preparedAttachments ?? [];
@@ -160,7 +175,7 @@ export const chatSocketHandler = async (
         for (const file of data.attachments) {
           try {
             const fileBuffer = Buffer.from(file.data || ''); // Assuming file.data is the file content as a Buffer
-            const fileUrl = await S3.uploadFileToS3('files-for-chat',fileBuffer, file.key, file.type);
+            const fileUrl = await S3.uploadFileToS3('files-for-chat',fileBuffer, file.key, file.type, { noStore: viewOnce });
             attachmentsWithUrls.push({
               _id: new ObjectId(),
               name: file.name,
@@ -204,6 +219,10 @@ export const chatSocketHandler = async (
         attachments: attachmentsWithUrls,
         requested: requestedType,
       });
+      if (viewOnce && !['Image', 'Video', 'VoiceNote'].includes(data.messageType)) {
+        io.to(`user:${senderId}`).emit('chatError', { error: 'Only photos, videos and voice notes can be sent as view once' });
+        return;
+      }
 
       // `@all` is decided here from the stored group, never from what the client claims.
       const everyoneAllowed = !options.trustedSender && !options.forwarded && mentionsEveryone(data.content) && canMentionEveryone({
@@ -227,6 +246,7 @@ export const chatSocketHandler = async (
         attachments: attachmentsWithUrls || [],
         quotedMessageId: data.quotedMessageId,
         forwarded: options.forwarded,
+        viewOnce: viewOnce || undefined,
         // A reply to a status carries a snapshot of it; the client only names the status.
         statusReply: options.trustedSender || options.forwarded ? undefined : await resolveStatusReply(db, senderId, data),
         status: 'sent' as msgStatus,
@@ -471,7 +491,7 @@ export const chatSocketHandler = async (
                   targetType: 'chat_message',
                   targetId: mentionNotification.messageId,
                   url: chatUrl(data.chatId, data.chatType),
-                  snippet: messageDisplayText(data.messageType, data.content),
+                  snippet: viewOnce ? viewOnceLabel(data.messageType) : messageDisplayText(data.messageType, data.content),
                   chatId: data.chatId,
                   chatType: data.chatType,
                 });
@@ -522,7 +542,7 @@ export const chatSocketHandler = async (
           chatId: data.chatId,
           senderId,
           messageId: message._id?.toString() || '',
-          content: messageDisplayText(data.messageType, data.content),
+          content: viewOnce ? viewOnceLabel(data.messageType) : messageDisplayText(data.messageType, data.content),
           attachmentCount: attachmentsWithUrls.length,
           mentions,
           everyone: everyoneAllowed,

@@ -1,3 +1,4 @@
+import { startViewOnceSweep } from './lib/viewOnce.js';
 import { config } from 'dotenv';
 config()
 import cors from "cors";
@@ -35,6 +36,7 @@ console.log('Port:', port);
 export const redis = sharedRedis;
 
 startPresenceSweep(sharedRedis);
+startViewOnceSweep(() => new MongoDBClient().init());
 
 async function ensureNotificationIndexes() {
   try {

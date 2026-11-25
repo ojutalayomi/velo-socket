@@ -42,7 +42,8 @@ export function parseForwardRequest(
 export const NON_FORWARDABLE_TYPES = ['Call', 'Poll', 'PollResponse', 'PollEnd', 'PollResult', 'Announcement'];
 
 /** A deleted message, one with nothing left to show, or one of the types above is never forwarded. */
-export function isForwardable(message: { content?: string; attachmentCount: number; messageType?: string }): boolean {
+export function isForwardable(message: { content?: string; attachmentCount: number; messageType?: string; viewOnce?: boolean }): boolean {
+  if (message.viewOnce) return false;
   if (message.messageType && NON_FORWARDABLE_TYPES.includes(message.messageType)) return false;
   const content = message.content ?? '';
   if (content.endsWith(DELETED_MARKER)) return false;
