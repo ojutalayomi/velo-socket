@@ -28,6 +28,7 @@ import { replyAsAi } from "./groupAi.js";
 import { canSendMessage } from "./chatPermissions.js";
 import { senderFromAccount, storedSender } from "./senderProfile.js";
 import { deriveMessageType } from "./messageType.js";
+import { resolveStatusReply } from "./statusReply.js";
 import { unreadIncrement } from "./unreadCounts.js";
 
 export const chatSocketHandler = async (
@@ -226,6 +227,8 @@ export const chatSocketHandler = async (
         attachments: attachmentsWithUrls || [],
         quotedMessageId: data.quotedMessageId,
         forwarded: options.forwarded,
+        // A reply to a status carries a snapshot of it; the client only names the status.
+        statusReply: options.trustedSender || options.forwarded ? undefined : await resolveStatusReply(db, senderId, data),
         status: 'sent' as msgStatus,
         messageType: data.messageType as MessageType,
         mentions: mentions.map((mention) => ({

@@ -1,7 +1,7 @@
 import { ObjectId } from "mongodb";
 
 import { MongoDBClient } from "../mongodb.js";
-import { Attachment, ChatType, Mention, MessageAttributes, MessageSchema, MessageType, msgStatus, Reaction } from "../types.js";
+import { Attachment, ChatType, Mention, MessageAttributes, MessageSchema, MessageType, msgStatus, Reaction, StatusReplyPreview } from "../types.js";
 
 /**
  * Represents a simplified chat message object in the application's database.
@@ -24,6 +24,7 @@ export class ChatMessage implements MessageSchema {
     public status: msgStatus;
     public mentions: Mention[];
     public forwarded?: boolean;
+    public statusReply?: StatusReplyPreview;
   
     // constructor to force use of factory methods
     constructor(data: MessageAttributes) {
@@ -45,6 +46,7 @@ export class ChatMessage implements MessageSchema {
       this.chatType = data.chatType;
       this.mentions = data.mentions || [];
       if (data.forwarded) this.forwarded = true;
+      if (data.statusReply) this.statusReply = data.statusReply;
     }
 
     public toMessageAttributes(attachments: Attachment[] = []): MessageAttributes {
@@ -64,6 +66,7 @@ export class ChatMessage implements MessageSchema {
             chatType: this.chatType,
             mentions: this.mentions,
             ...(this.forwarded ? { forwarded: true } : {}),
+            ...(this.statusReply ? { statusReply: this.statusReply } : {}),
         };
     }
   
