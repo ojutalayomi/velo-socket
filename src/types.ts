@@ -137,7 +137,7 @@ export type BlockedUser = {
 
 export type NotificationType = 'like' | 'comment' | 'follow' | 'mention' | 'share';
 
-export type NotificationTarget = 'post' | 'comment' | 'chat_message' | 'user';
+export type NotificationTarget = 'post' | 'comment' | 'chat_message' | 'user' | 'status';
 
 export type NotificationActor = {
   id: string;
@@ -222,7 +222,7 @@ export interface PostInfo {
 export type PostBookmarkSchema = PostInfo
 export type PostLikesSchema = PostInfo
 
-export type StatusMediaType = 'image' | 'video';
+export type StatusMediaType = 'image' | 'video' | 'audio' | 'text';
 export type StatusVisibility = 'followers' | 'everyone';
 
 export type StatusSchema = {
@@ -232,9 +232,23 @@ export type StatusSchema = {
   mediaKey: string;
   mediaType: StatusMediaType;
   caption: string;
+  text?: string;
+  background?: string;
+  durationSec?: number;
   createdAt: string;
   expiresAt: string;
+  /** Date-typed copy of `expiresAt`, used by the TTL index. */
+  expiresAtDate?: Date;
   visibility: StatusVisibility;
+  mentions?: { userId: string; username: string }[];
+}
+
+export type StatusLikeSchema = {
+  _id: ObjectId;
+  statusId: string;
+  ownerId: string;
+  userId: string;
+  createdAt: string;
 }
 
 export type StatusViewerSchema = {

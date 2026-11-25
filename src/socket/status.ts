@@ -2,6 +2,7 @@ import { io } from '../socket.js';
 import { offlineMessageManager } from '../offline-messages.js';
 import { MongoDBClient } from '../mongodb.js';
 import { ObjectId } from 'mongodb';
+import { buildLikeDedupeKey, loadActor, recordNotification, removeNotification } from '../notifications/inApp.js';
 
 type StatusCreatePayload = {
   group: unknown;
@@ -12,6 +13,10 @@ type StatusDeletePayload = {
   statusId: string;
   ownerId: string;
   targetUserIds?: string[];
+};
+
+type StatusLikePayload = {
+  statusId: string;
 };
 
 type StatusViewPayload = {
@@ -118,6 +123,55 @@ io.on('connection', async (socket) => {
       ack?.();
     } catch (error) {
       console.error('Error handling status:view event:', error);
+      ack?.();
+    }
+  });
+  socket.on('status:like', async (data: StatusLikePayload, ack?: () => void) => {
+    try {
+      const statusId = String(data?.statusId ?? '');
+      if (ObjectId.isValid(statusId)) {
+        // Whether the connected user likes it now, straight from the database the web app wrote to.
+        const db = await new MongoDBClient().init();
+        const status = await db.statuses().findOne({ _id: new ObjectId(statusId) }, { projection: { userId: 1, mediaType: 1 } });
+        if (status) {
+          const ownerId = String(status.userId);
+          const [liked, likeCount] = await Promise.all([
+            db.statusLikes().findOne({ statusId, userId }).then(Boolean),
+            db.statusLikes().countDocuments({ statusId }),
+          ]);
+          // The owner's count moves; the liker's other devices keep the heart in step.
+          io.to(`user:${ownerId}`).to(`user:${userId}`).emit('statusLiked', {
+            statusId,
+            ownerId,
+            userId,
+            liked,
+            likeCount,
+          });
+
+          if (ownerId !== userId) {
+            try {
+              if (liked) {
+                await recordNotification(db, {
+                  recipientId: ownerId,
+                  actorId: userId,
+                  actor: (await loadActor(db, userId)) ?? undefined,
+                  type: 'like',
+                  targetType: 'status',
+                  targetId: statusId,
+                  url: '/home',
+                });
+              } else {
+                await removeNotification(db, buildLikeDedupeKey('status', statusId, ownerId, userId));
+              }
+            } catch (error) {
+              console.error('Error updating status like notification:', error);
+            }
+          }
+        }
+      }
+      ack?.();
+    } catch (error) {
+      console.error('Error handling status:like event:', error);
       ack?.();
     }
   });

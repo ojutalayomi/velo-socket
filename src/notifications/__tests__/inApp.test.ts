@@ -209,6 +209,8 @@ test('builds the documented group and dedupe keys', () => {
   assert.equal(buildGroupKey('like', 'post', 'p1'), 'like:post:p1');
   assert.equal(buildGroupKey('mention', 'chat_message', 'm1'), 'mention:chat_message:m1');
   assert.equal(buildLikeDedupeKey('comment', 'c1', 'r1', 'a1'), 'like:comment:c1:r1:a1');
+  assert.equal(buildLikeDedupeKey('status', 's1', 'r1', 'a1'), 'like:status:s1:r1:a1');
+  assert.equal(buildGroupKey('like', 'status', 's1'), 'like:status:s1');
   assert.equal(buildFollowDedupeKey('r1', 'a1'), 'follow:r1:a1');
   assert.equal(
     buildDedupeKey('comment', 'post', 'p1', 'r1', 'a1', 'new-comment'),

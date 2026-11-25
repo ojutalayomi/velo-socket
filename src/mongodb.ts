@@ -1,7 +1,7 @@
 import { config } from 'dotenv';
 config()
 import { Db, MongoClient, ServerApiVersion } from 'mongodb';
-import { AttachmentSchema, BlockedUser, ChatData, ChatParticipant, ChatSettings, FollowersSchema, InAppNotification, MessageSchema, PostBookmarkSchema, PostLikesSchema, PostSchema, Reaction, ReadReceipt, StatusSchema, StatusViewerSchema, TokensSchema, UserSchema, UserSettings, VideoSchema } from './types';
+import { AttachmentSchema, BlockedUser, ChatData, ChatParticipant, ChatSettings, FollowersSchema, InAppNotification, MessageSchema, PostBookmarkSchema, PostLikesSchema, PostSchema, Reaction, ReadReceipt, StatusLikeSchema, StatusSchema, StatusViewerSchema, TokensSchema, UserSchema, UserSettings, VideoSchema } from './types';
 
 const uri = process.env.MONGOLINK || '';
 
@@ -255,6 +255,10 @@ export class MongoDBClient {
 
   statuses() {
     return this.db.collection<StatusSchema>("Statuses");
+  }
+
+  statusLikes() {
+    return this.db.collection<StatusLikeSchema>('Status_Likes');
   }
 
   statusViewers() {
