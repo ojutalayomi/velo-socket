@@ -6,6 +6,8 @@ import { offlineMessageManager } from '../offline-messages.js';
 import { loadActor, recordNotification } from '../notifications/inApp.js';
 import { mentionsAi } from '../notifications/groupMentions.js';
 import { contentUrl } from '../notifications/targets.js';
+import { withoutAuthor } from './postAuthor.js';
+import { withAuthors } from './postAuthors.js';
 import { aiModel, openRouter } from './openRouter.js';
 import { buildPostAiPrompt, type PostAiContext, type PostLike } from './postAiPrompt.js';
 
@@ -92,7 +94,16 @@ export async function maybeReplyAsAiToPost(params: { redis: Redis; post: PostLik
       return;
     }
 
-    const context = await loadContext(collections, post);
+    const loaded = await loadContext(collections, post);
+    // Names come from the accounts, not from copies stored in each post.
+    const users = db.users();
+    const [quoted] = loaded.quoted ? await withAuthors(users, [loaded.quoted]) : [null];
+    const context: PostAiContext = {
+      ...loaded,
+      thread: await withAuthors(users, loaded.thread),
+      quoted: quoted ?? null,
+      replies: await withAuthors(users, loaded.replies),
+    };
     const result = await openRouter.chat.completions.create({
       model: aiModel(),
       messages: [
@@ -139,7 +150,7 @@ export async function maybeReplyAsAiToPost(params: { redis: Redis; post: PostLik
         : (await collections.shares.findOne({ PostID: post.PostID }, { projection: { _id: 1 } }))
           ? collections.shares
           : collections.comments;
-    await collections.comments.insertOne(reply as never);
+    await collections.comments.insertOne(withoutAuthor(reply) as never);
     const updated = await parentCollection.findOneAndUpdate(
       { PostID: post.PostID },
       { $inc: { NoOfComment: 1 } },

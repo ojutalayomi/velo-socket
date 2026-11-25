@@ -10,6 +10,8 @@ import {
 } from "../notifications/inApp.js";
 import { resolveMentionedUserIds } from "../notifications/mentions.js";
 import { contentUrl } from "../notifications/targets.js";
+import { withoutAuthor, type PostAuthorFields } from "../lib/postAuthor.js";
+import { withAuthors } from "../lib/postAuthors.js";
 import { BlogPost, NotificationActor, NotificationTarget, PostSchema, ReactionType, SharedBlogPost } from "../types.js";
 import { io } from '../socket.js';
 import { maybeReplyAsAiToPost, type PostLike } from '../lib/postAi.js';
@@ -173,6 +175,8 @@ io.on('connection', (socket) => {
                 targetType = 'comment';
             }
 
+            if (post) post = (await withAuthors(collection, [post]))[0];
+
             if (!post) {
                 return io.to(`user:${userId}`).emit("post_reaction_response", { message: "Blog is not available!", success: false, postId: data.postId, reaction: data.type });
             }
@@ -230,7 +234,8 @@ io.on('connection', (socket) => {
                     searchText?: string;
                 } = { _id: new ObjectId(), postId: data.postId, userId };
                 if (data.type === "bookmark") {
-                    const parts = [post.Caption, post.Username, post.NameOfPoster, post.PostID]
+                    const author = post as typeof post & Partial<PostAuthorFields>; // filled in above from the account
+                    const parts = [post.Caption, author.Username, author.NameOfPoster, post.PostID]
                         .filter((v) => v != null && String(v).trim() !== "")
                         .map((v) => String(v));
                     reactionDoc.searchText = parts.join("\n");
@@ -324,6 +329,8 @@ io.on('connection', (socket) => {
                 PostsOrSharesOrComments = comments;
             }
 
+            if (post) post = (await withAuthors(collection, [post]))[0];
+
             if (!post) {
                 return io.to(`user:${userId}`).emit("post_reaction_response", { message: "Post is not available!", success: false, postId: data.post.PostID, reaction: data.action });
             }
@@ -383,7 +390,7 @@ io.on('connection', (socket) => {
                     };
                     repost.PostID = repost._id.toString();
 
-                    await shares.insertOne(repost as PostSchema);
+                    await shares.insertOne(withoutAuthor(repost) as PostSchema);
                     await PostsOrSharesOrComments.updateOne(
                         { PostID: targetPostId },
                         { $inc: { NoOfShares: 1 } }
@@ -468,7 +475,7 @@ io.on('connection', (socket) => {
                     };
                     quote.PostID = quote._id.toString();
         
-                    await shares.insertOne(quote);
+                    await shares.insertOne(withoutAuthor(quote) as SharedBlogPost);
                     await PostsOrSharesOrComments.updateOne(
                         { PostID: targetPostId },
                         { $inc: { NoOfShares: 1 } }
@@ -664,12 +671,14 @@ io.on('connection', (socket) => {
                     PostsOrSharesOrComments = comments;
                 }
 
+                if (post) post = (await withAuthors(collection, [post]))[0];
+
                 if (!post) {
                     return io.to(`user:${userId}`).emit("post_reaction_response", { message: "Post is not available!", success: false, postId: data.PostID, reaction: data.Type });
                 }
 
                 // Save the new comment and update the post
-                await comments.insertOne(blog);
+                await comments.insertOne(withoutAuthor(blog));
             
                 await PostsOrSharesOrComments.updateOne({ PostID: data.ParentId }, { $inc: { NoOfComment: 1} });
 
@@ -745,7 +754,7 @@ io.on('connection', (socket) => {
                     console.error('Error writing comment notifications:', error);
                 }
             } else {
-                await posts.insertOne(blog)
+                await posts.insertOne(withoutAuthor(blog))
                 
                 // Use offline message system for new posts
                 await offlineMessageManager.broadcastMessage({

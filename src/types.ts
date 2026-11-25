@@ -187,12 +187,10 @@ export type VideoSchema = {
   video: string,
 }
 
+/** A post, comment or share as stored: who wrote it is the UserId alone (profiles come from accounts). */
 export type PostSchema = {
   _id: ObjectId;
   UserId: string;
-  DisplayPicture: string;
-  NameOfPoster: string;
-  Verified: boolean;
   TimeOfPost: string;
   Visibility: 'everyone' | 'friends' | 'none';
   Caption: string;
@@ -204,7 +202,6 @@ export type PostSchema = {
   NoOfShares: number;
   NoOfBookmarks: number;
   Bookmarked: boolean;
-  Username: string;
   PostID: string;
   Code: string;
   WhoCanComment: 'everyone' | 'friends' | 'none';
