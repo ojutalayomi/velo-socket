@@ -28,6 +28,7 @@ export interface OfflineMessage {
     | 'followNotification'
     | 'statusCreated'
     | 'statusDeleted'
+    | 'pinnedMessagesUpdated'
     | 'mentionNotification';
   userId: string;
   data: any;

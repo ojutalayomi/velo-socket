@@ -7,6 +7,7 @@ import { offlineMessageManager } from '../offline-messages.js';
 import { chatSocketHandler } from "../lib/chatSocketHandler.js";
 import { announceMessage } from "../lib/announceMessage.js";
 import { forwardMessages } from "../lib/forwardMessages.js";
+import { pinMessage, removePinsForMessage, unpinMessage } from '../lib/pinnedMessages.js';
 import { isChatParticipant } from '../utils.js';
 import { getPrivacy } from '../privacy.js';
 import { ADMIN_DELETED_CONTENT, canDeleteChat, messageDeletion, parseParticipantUpdates, SENDER_DELETED_CONTENT } from '../lib/conversationUpdates.js';
@@ -314,6 +315,8 @@ io.on('connection', async (socket: UserSocket) => {
             if (message.attachments && message.attachments.length > 0) {
               await db.files().deleteMany({ key: { $in: message.attachments } });
             }
+            // A deleted message can't stay pinned.
+            await removePinsForMessage(db, message.chatId, id).catch((error) => console.error('Error unpinning the deleted message:', error));
 
             const members = await db.chatParticipants()
               .find({ chatId: message.chatId }, { projection: { userId: 1 } })
@@ -354,6 +357,27 @@ io.on('connection', async (socket: UserSocket) => {
         socket.emit('chatError', { error: 'Failed to update conversation' });
       }
     });
+
+    // Pin or unpin a message for everyone in the chat. Membership, admin rights, the message and the
+    // limit are all checked here against the database; the answer to the caller says what happened.
+    for (const [event, run] of [['pinMessage', pinMessage], ['unpinMessage', unpinMessage]] as const) {
+      socket.on(event, async (
+        data: { chatId?: string; messageId?: string },
+        ack?: (result: { ok: boolean; error?: string; pinnedMessages?: unknown[] }) => void
+      ) => {
+        try {
+          const result = await run(db, {
+            userId,
+            chatId: String(data?.chatId ?? ''),
+            messageId: String(data?.messageId ?? ''),
+          });
+          ack?.(result.ok ? { ok: true, pinnedMessages: result.pins } : { ok: false, error: result.error });
+        } catch (error) {
+          console.error(`Error in ${event}:`, error);
+          ack?.({ ok: false, error: 'Something went wrong' });
+        }
+      });
+    }
 
     // The user has opened the chat: record real read receipts for everything still pending,
     // then tell each message's sender so their ticks can turn blue.

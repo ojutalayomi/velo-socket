@@ -551,6 +551,8 @@ export type ChatData = {
   isPrivate: boolean;
   /** Announcement mode: only admins may post. */
   onlyAdminsCanSend?: boolean;
+  /** Messages pinned for everyone in the chat, newest first. */
+  pinnedMessages?: { messageId: string; pinnedBy: string; pinnedAt: string }[];
   lastMessageId: string;
   timestamp: string;
   lastUpdated: string;
