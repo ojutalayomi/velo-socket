@@ -30,6 +30,7 @@ import { senderFromAccount, storedSender } from "./senderProfile.js";
 import { deriveMessageType } from "./messageType.js";
 import { resolveStatusReply } from "./statusReply.js";
 import { unreadIncrement } from "./unreadCounts.js";
+import { uniqueStorageKey } from "./storageKey.js";
 import { viewOnceLabel, viewOnceRequestError } from "./viewOnceRules.js";
 
 export const chatSocketHandler = async (
@@ -173,13 +174,16 @@ export const chatSocketHandler = async (
       if (!options.preparedAttachments && data.attachments && data.attachments.length > 0) {
         // Upload each file to S3 and store the URLs
         for (const file of data.attachments) {
+          // The server picks the storage key: two uploads with the same file name must not overwrite
+          // each other, and the key of a view once file must not be guessable.
+          const storageKey = uniqueStorageKey(file.key, file.name);
           try {
             const fileBuffer = Buffer.from(file.data || ''); // Assuming file.data is the file content as a Buffer
-            const fileUrl = await S3.uploadFileToS3('files-for-chat',fileBuffer, file.key, file.type, { noStore: viewOnce });
+            const fileUrl = await S3.uploadFileToS3('files-for-chat',fileBuffer, storageKey, file.type, { noStore: viewOnce });
             attachmentsWithUrls.push({
               _id: new ObjectId(),
               name: file.name,
-              key: file.key,
+              key: storageKey,
               type: file.type,
               url: fileUrl, // Add the S3 URL to the attachment
               size: Buffer.byteLength(fileBuffer),
@@ -190,7 +194,7 @@ export const chatSocketHandler = async (
             attachmentsWithUrls.push({
               _id: new ObjectId(),
               name: file.name,
-              key: file.key,
+              key: storageKey,
               type: file.type,
               url: "", // Mark the file as failed to upload
               size: file.size || 0,
