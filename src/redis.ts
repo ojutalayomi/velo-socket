@@ -1,35 +1,16 @@
 import Redis from 'ioredis';
 
-const host = process.env.REDIS_HOST?.trim();
-const port = Number(process.env.REDIS_PORT) || 6379;
-const password = process.env.REDIS_PASSWORD;
+const redisUrl = process.env.REDIS_URL?.trim();
 
-if (!host) {
+if (!redisUrl) {
   throw new Error(
-    'REDIS_HOST is required.'
-  )
+    'REDIS_URL is required. Set it to the complete Redis connection string, including the password and TLS scheme when required.'
+  );
 }
 
-if (!port) {
-  throw new Error(
-    'REDIS_PORT is required.'
-  )
-}
-
-if (!password) {
-  throw new Error(
-    'REDIS_PASSWORD is required.'
-  )
-}
-export const redis = new Redis({
-  host,
-  password,
-  port,
+export const redis = new Redis(redisUrl, {
   connectTimeout: 10_000,
   maxRetriesPerRequest: 1,
-  tls: {
-    servername: host,
-  },
   retryStrategy: (attempt) => Math.min(attempt * 1_000, 10_000),
 });
 
