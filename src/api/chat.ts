@@ -60,10 +60,12 @@ const chatHandler: RequestHandler = async (req, res) => {
     }
 
     const db = await new MongoDBClient().init();
-
+    const extractedReceiver = await db.users().findOne({ _id: new ObjectId(req.body.messages[req.body.messages.length - 1].receiverId) }) as UserSchema;
+    console.info(extractedReceiver)
     bot = new SocialMediaUser(
-      await db.users().findOne({ _id: new ObjectId(req.body.messages[req.body.messages.length - 1].receiverId) }) as UserSchema
+      extractedReceiver
     );
+    console.info(bot.getClientSafeData())
 
     // The reply is posted as the receiver, so the receiver must really be a bot.
     if (bot.isUserNull() || bot.accountType !== 'bot') {
