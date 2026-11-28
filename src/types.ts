@@ -193,7 +193,7 @@ export type PostSchema = {
   _id: ObjectId;
   UserId: string;
   TimeOfPost: string;
-  Visibility: 'everyone' | 'friends' | 'none';
+  Visibility: 'everyone' | 'friends' | 'me' | 'none';
   Caption: string;
   Image: string[];
   IsFollowing: boolean;
@@ -606,7 +606,7 @@ export type BlogPost = {
   NameOfPoster: string;
   Verified: boolean;
   TimeOfPost: string;
-  Visibility: Visibility;
+  Visibility: 'everyone' | 'friends' | 'me';
   Caption: string;
   Image: string[];
   NoOfLikes: number;
@@ -618,7 +618,11 @@ export type BlogPost = {
   Username: string;
   PostID: string;
   Code: string;
-  WhoCanComment: CommentPermission;
+  WhoCanComment: 'everyone' | 'friends' | 'none';
+  /** Set while the post is waiting for its publish time; removed when it goes live. */
+  scheduledFor?: string;
+  /** A GIF or sticker from KLIPY, kept as a link. */
+  Gif?: PostGif;
   Shared: boolean;
   Type: "post" | "comment" | "repost" | "quote";
   ParentId: string;
@@ -659,3 +663,13 @@ export type ReactionType = {
   value: 'inc' | 'dec',
   postId: string;
 };
+
+export interface PostGif {
+  provider: 'klipy';
+  kind: 'gifs' | 'stickers';
+  slug: string;
+  url: string;
+  title?: string;
+  width?: number;
+  height?: number;
+}

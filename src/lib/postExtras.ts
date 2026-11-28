@@ -3,6 +3,7 @@ import { callPreview, parseCallRecord } from './callRecord.js';
 /** Validation for the optional poll / location attached to a post (mirrors velo's lib/polls.ts). */
 export type PollData = { question: string; options: string[]; multiple: boolean; expiresAt?: string };
 export type PostLocation = { name: string; lat?: number; lng?: number };
+export type PostGifData = { provider: 'klipy'; kind: 'gifs' | 'stickers'; slug: string; url: string; title?: string; width?: number; height?: number };
 
 const MAX_QUESTION = 200;
 const MAX_OPTION = 80;
@@ -31,6 +32,25 @@ export function sanitizePoll(input: unknown): PollData | null {
     poll.expiresAt = new Date(raw.expiresAt).toISOString();
   }
   return poll;
+}
+
+const MAX_GIF_URL = 500;
+const MAX_GIF_TITLE = 200;
+
+/** A KLIPY GIF or sticker attached to a post: only a KLIPY link is kept, with sizes bounded. */
+export function sanitizeGif(input: unknown): PostGifData | null {
+  if (!input || typeof input !== 'object') return null;
+  const raw = input as Partial<PostGifData>;
+  if (raw.provider !== 'klipy' || (raw.kind !== 'gifs' && raw.kind !== 'stickers')) return null;
+  if (typeof raw.slug !== 'string' || !raw.slug || raw.slug.length > 200) return null;
+  if (typeof raw.url !== 'string' || raw.url.length > MAX_GIF_URL || !isKlipyUrl(raw.url)) return null;
+  const gif: PostGifData = { provider: 'klipy', kind: raw.kind, slug: raw.slug, url: raw.url };
+  if (typeof raw.title === 'string' && raw.title.trim()) gif.title = raw.title.trim().slice(0, MAX_GIF_TITLE);
+  for (const key of ['width', 'height'] as const) {
+    const value = raw[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 4000) gif[key] = Math.round(value);
+  }
+  return gif;
 }
 
 export function sanitizeLocation(input: unknown): PostLocation | null {

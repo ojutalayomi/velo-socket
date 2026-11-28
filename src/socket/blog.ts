@@ -15,7 +15,10 @@ import { withAuthors } from "../lib/postAuthors.js";
 import { BlogPost, NotificationActor, NotificationTarget, PostSchema, ReactionType, SharedBlogPost } from "../types.js";
 import { io } from '../socket.js';
 import { maybeReplyAsAiToPost, type PostLike } from '../lib/postAi.js';
-import { sanitizeLocation, sanitizePoll } from '../lib/postExtras.js';
+import { sanitizeGif, sanitizeLocation, sanitizePoll } from '../lib/postExtras.js';
+import { getMutualIds, threadAccess } from '../lib/postAudience.js';
+import { resolveAudience } from '../lib/postVisibility.js';
+import { pollOutlivesSchedule, validateScheduledFor } from '../lib/scheduling.js';
 import { deleteFileFromS3 } from "../s3.js";
 import { offlineMessageManager } from '../offline-messages.js';
 import { redis } from '../redis.js';
@@ -136,6 +139,81 @@ async function sendSharePushNotification(params: SharePushParams): Promise<void>
     }
 }
 
+/**
+ * Announces a post that is now live: tells the people who may see it, notifies the people it
+ * mentions, and lets `@ai` answer. Used right away for a normal post and later by the sweep for a
+ * scheduled one, so both behave the same.
+ */
+export async function publishPost(blog: BlogPost): Promise<void> {
+    const inboxDb = await new MongoDBClient().init();
+    const userId = blog.UserId;
+
+    let notificationActor: NotificationActor | null = null;
+    let mentionedActors: NotificationActor[] = [];
+    try {
+        notificationActor = await loadActor(inboxDb, userId);
+        if (notificationActor) {
+            mentionedActors = await resolveMentionedUserIds(inboxDb, blog.Caption);
+        }
+    } catch (error) {
+        console.error('Error resolving notification recipients:', error);
+    }
+
+    // Only the people who may see the post hear about it: everyone online for a public post,
+    // mutual follows for "friends", nobody for "only me".
+    const audienceIds = blog.Visibility === 'everyone'
+        ? null
+        : blog.Visibility === 'friends'
+            ? await getMutualIds(inboxDb, userId)
+            : [];
+    if (audienceIds) mentionedActors = mentionedActors.filter((actor) => audienceIds.includes(actor.id));
+
+    if (!audienceIds || audienceIds.length > 0) {
+        await offlineMessageManager.broadcastMessage({
+            type: 'newPost',
+            data: { blog },
+        }, userId, audienceIds ?? undefined);
+    }
+
+    try {
+        if (notificationActor) {
+            for (const mention of mentionedActors) {
+                if (mention.id === userId) continue;
+
+                const wasRecorded = await recordNotification(inboxDb, {
+                    recipientId: mention.id,
+                    actorId: userId,
+                    actor: notificationActor,
+                    type: 'mention',
+                    targetType: 'post',
+                    targetId: blog.PostID,
+                    url: contentUrl(blog),
+                    snippet: blog.Caption,
+                });
+
+                if (wasRecorded) {
+                    await sendMentionPushNotification({
+                        inboxDb,
+                        redis,
+                        recipientId: mention.id,
+                        actorId: userId,
+                        actorName: notificationActor.name,
+                        postId: blog.PostID,
+                        snippet: blog.Caption,
+                    });
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error writing post notifications:', error);
+    }
+
+    // `@ai` asks the assistant to answer as a comment. Not awaited: the model call is slow.
+    if (blog.Type === 'post') {
+        void maybeReplyAsAiToPost({ redis, post: blog as unknown as PostLike });
+    }
+}
+
 io.on('connection', (socket) => {
     const userId = socket.handshake.query.userId as string;
 
@@ -178,6 +256,11 @@ io.on('connection', (socket) => {
             if (post) post = (await withAuthors(collection, [post]))[0];
 
             if (!post) {
+                return io.to(`user:${userId}`).emit("post_reaction_response", { message: "Blog is not available!", success: false, postId: data.postId, reaction: data.type });
+            }
+
+            // A post you can't read can't be liked or bookmarked. Undoing is always allowed.
+            if (!data.type?.includes('un') && !(await threadAccess(db, post as unknown as Record<string, unknown>, userId)).visible) {
                 return io.to(`user:${userId}`).emit("post_reaction_response", { message: "Blog is not available!", success: false, postId: data.postId, reaction: data.type });
             }
 
@@ -337,6 +420,15 @@ io.on('connection', (socket) => {
 
             if (!data.action) return io.to(`user:${userId}`).emit("post_reaction_response", { message: "This is an invalid reaction!", success: false, postId: data.post.PostID, reaction: data.action });
 
+            // Only public posts can be reposted or quoted: sharing one would show it to people who
+            // are not in its audience.
+            if (data.action !== 'unshare') {
+                const access = await threadAccess(inboxDb, post as unknown as Record<string, unknown>, userId);
+                if (!access.visible || access.audience !== null) {
+                    return io.to(`user:${userId}`).emit("post_reaction_response", { message: "This post can't be shared.", success: false, postId: data.post.PostID, reaction: data.action });
+                }
+            }
+
             // Check if the user has already reposted
             const existingRepost = await shares.findOne({ OriginalPostId: targetPostId, UserId: userId, Type: "repost" });
             
@@ -447,6 +539,7 @@ io.on('connection', (socket) => {
                     }
                 } else if (data.type === "quote") {
                     // Create a new quoted post
+                    const quoteAudience = resolveAudience(data.post);
                     const quote: SharedBlogPost = {
                         _id: new ObjectId(),
                         ParentId: "",
@@ -455,7 +548,7 @@ io.on('connection', (socket) => {
                         NameOfPoster: `${user.firstname ?? ""} ${user.lastname ?? ""}`.trim(),
                         Verified: user.verified ?? false,
                         TimeOfPost: new Date().toISOString(),
-                        Visibility: data.post.Visibility,
+                        Visibility: quoteAudience.Visibility,
                         Caption: data.post.Caption ?? "", // Include user's caption
                         Image: data.post.Image ?? [],
                         IsFollowing: false,
@@ -468,11 +561,13 @@ io.on('connection', (socket) => {
                         Shared: false,
                         Username: user.username || "",
                         Code: data.post.Code,
-                        WhoCanComment: data.post.WhoCanComment,
+                        WhoCanComment: quoteAudience.WhoCanComment,
                         Type: "quote",
                         PostID: "",
                         OriginalPostId: data.post.OriginalPostId,
                     };
+                    const quoteGif = sanitizeGif((data.post as { Gif?: unknown }).Gif);
+                    if (quoteGif) (quote as SharedBlogPost & { Gif?: unknown }).Gif = quoteGif;
                     quote.PostID = quote._id.toString();
         
                     await shares.insertOne(withoutAuthor(quote) as SharedBlogPost);
@@ -492,12 +587,20 @@ io.on('connection', (socket) => {
                         }
                     }, userId);
         
-                    await offlineMessageManager.broadcastMessage({
-                        type: 'newPost',
-                        data: {
-                            blog: quote,
-                        }
-                    }, userId);
+                    // A quote set to friends or only me is announced to that audience alone.
+                    const quoteAudienceIds = quote.Visibility === 'everyone'
+                        ? null
+                        : quote.Visibility === 'friends'
+                            ? await getMutualIds(inboxDb, userId)
+                            : [];
+                    if (!quoteAudienceIds || quoteAudienceIds.length > 0) {
+                        await offlineMessageManager.broadcastMessage({
+                            type: 'newPost',
+                            data: {
+                                blog: quote,
+                            }
+                        }, userId, quoteAudienceIds ?? undefined);
+                    }
 
                     void maybeReplyAsAiToPost({ redis, post: quote as unknown as PostLike });
 
@@ -602,6 +705,9 @@ io.on('connection', (socket) => {
                 return io.to(`user:${userId}`).emit("post_response", { message: `You're not allowed to ${data.Type}!`, success: false });
             }
         
+            // One control sets who can see the post and who can reply; never trust a client's pair.
+            const audience = resolveAudience(data);
+
             // Create a new blog
             const blog: BlogPost = {
                 _id: new ObjectId(),
@@ -610,8 +716,8 @@ io.on('connection', (socket) => {
                 DisplayPicture: user.displayPicture || '',
                 NameOfPoster: `${user.firstname ?? ''} ${user.lastname ?? ''}`.trim(),
                 Verified: user.verified ?? false,
-                TimeOfPost: data.TimeOfPost ?? new Date().toISOString(),
-                Visibility: data.Visibility,
+                TimeOfPost: new Date().toISOString(),
+                Visibility: audience.Visibility,
                 Caption: data.Caption ?? '',
                 Image: data.Image ?? [],
                 IsFollowing: false,
@@ -624,7 +730,7 @@ io.on('connection', (socket) => {
                 Shared: false,
                 Username: user.username || '',
                 Code: data.Code,
-                WhoCanComment: data.WhoCanComment,
+                WhoCanComment: audience.WhoCanComment,
                 Type: data.Type,
                 PostID: "",
             };
@@ -635,7 +741,34 @@ io.on('connection', (socket) => {
             }
             const location = sanitizeLocation((data as { Location?: unknown }).Location);
             if (location) blog.Location = location;
+            const gif = sanitizeGif((data as { Gif?: unknown }).Gif);
+            if (gif) blog.Gif = gif;
             // console.log(data)
+
+            // A post for later is saved quietly: nobody is told and nobody sees it until the sweep publishes it.
+            const requestedSchedule = (data as { scheduledFor?: unknown }).scheduledFor;
+            if (requestedSchedule !== undefined && requestedSchedule !== null && requestedSchedule !== '') {
+                const check = validateScheduledFor(requestedSchedule);
+                if (blog.Type !== 'post') {
+                    return io.to(`user:${userId}`).emit("post_response", { message: "Only posts can be scheduled.", success: false });
+                }
+                if (!check.ok) {
+                    return io.to(`user:${userId}`).emit("post_response", { message: check.error, success: false });
+                }
+                if (!pollOutlivesSchedule(blog.Poll as { expiresAt?: string } | undefined, check.iso)) {
+                    return io.to(`user:${userId}`).emit("post_response", { message: "The poll closes before the post is published.", success: false });
+                }
+                blog.scheduledFor = check.iso;
+                blog.TimeOfPost = check.iso;
+                await posts.insertOne(withoutAuthor(blog));
+                return io.to(`user:${userId}`).emit("post_response", {
+                    message: "Post scheduled!",
+                    success: true,
+                    scheduled: true,
+                    postId: blog.PostID,
+                    scheduledFor: check.iso,
+                });
+            }
 
             let notificationActor: NotificationActor | null = null;
             let mentionedActors: NotificationActor[] = [];
@@ -661,7 +794,7 @@ io.on('connection', (socket) => {
                 
                 // If not found, check in the shares collection
                 if (!post) {
-                    post = await shares.findOne({ PostId: data.ParentId });
+                    post = await shares.findOne({ PostID: data.ParentId });
                     PostsOrSharesOrComments = shares;
                 } 
                 
@@ -677,6 +810,17 @@ io.on('connection', (socket) => {
                     return io.to(`user:${userId}`).emit("post_reaction_response", { message: "Post is not available!", success: false, postId: data.PostID, reaction: data.Type });
                 }
 
+                // Replies follow the audience of the post that starts the thread.
+                const access = await threadAccess(inboxDb, post as unknown as Record<string, unknown>, userId);
+                if (!access.visible) {
+                    return io.to(`user:${userId}`).emit("post_reaction_response", { message: "Post is not available!", success: false, postId: data.PostID, reaction: data.Type });
+                }
+                if (!access.canReply) {
+                    return io.to(`user:${userId}`).emit("post_response", { message: "You can't reply to this post.", success: false });
+                }
+                const audienceIds = access.audience;
+                if (audienceIds) mentionedActors = mentionedActors.filter((actor) => audienceIds.includes(actor.id));
+
                 // Save the new comment and update the post
                 await comments.insertOne(withoutAuthor(blog));
             
@@ -688,7 +832,7 @@ io.on('connection', (socket) => {
                     data: { 
                         blog: blog 
                     }
-                }, userId);
+                }, userId, audienceIds ?? undefined);
 
                 // broadcastMessage skips the author, so send them their own comment too.
                 io.to(`user:${userId}`).emit('newComment', { excludeUser: userId, blog });
@@ -702,7 +846,7 @@ io.on('connection', (socket) => {
                         },
                         type: blog.Type 
                     }
-                }, userId);
+                }, userId, audienceIds ?? undefined);
 
                 try {
                     if (notificationActor) {
@@ -755,51 +899,11 @@ io.on('connection', (socket) => {
                 }
             } else {
                 await posts.insertOne(withoutAuthor(blog))
-                
-                // Use offline message system for new posts
-                await offlineMessageManager.broadcastMessage({
-                    type: 'newPost',
-                    data: { 
-                        blog: blog 
-                    }
-                }, userId);
-
-                try {
-                    if (notificationActor) {
-                        for (const mention of mentionedActors) {
-                            if (mention.id === userId) continue;
-
-                            const wasRecorded = await recordNotification(inboxDb, {
-                                recipientId: mention.id,
-                                actorId: userId,
-                                actor: notificationActor,
-                                type: 'mention',
-                                targetType: 'post',
-                                targetId: blog.PostID,
-                                url: contentUrl(blog),
-                                snippet: blog.Caption,
-                            });
-
-                            if (wasRecorded) {
-                                await sendMentionPushNotification({
-                                    inboxDb,
-                                    redis,
-                                    recipientId: mention.id,
-                                    actorId: userId,
-                                    actorName: notificationActor.name,
-                                    postId: blog.PostID,
-                                    snippet: blog.Caption,
-                                });
-                            }
-                        }
-                    }
-                } catch (error) {
-                    console.error('Error writing post notifications:', error);
-                }
+                await publishPost(blog);
             }
         
             // `@ai` asks the assistant to answer as a comment. Not awaited: the model call is slow.
-            if (blog.Type === 'post' || blog.Type === 'comment') {
+            if (blog.Type === 'comment') {
                 void maybeReplyAsAiToPost({ redis, post: blog as unknown as PostLike });
             }
 

@@ -22,6 +22,10 @@ import { redis as sharedRedis } from './redis.js';
 import chatHandler from './api/chat.js';
 import { MongoDBClient } from './mongodb.js';
 import { ensureInAppIndexes } from './notifications/inApp.js';
+import { startScheduledPostSweep, sweepScheduledPosts } from './lib/scheduledPosts.js';
+import { withAuthors } from './lib/postAuthors.js';
+import { publishPost } from './socket/blog.js';
+import type { BlogPost } from './types.js';
 
 app.use(cors(corsOptions));
 
@@ -38,6 +42,15 @@ export const redis = sharedRedis;
 startPresenceSweep(sharedRedis);
 startViewOnceSweep(() => new MongoDBClient().init());
 
+// Posts scheduled for later go live here, on the server that already owns the announcing.
+startScheduledPostSweep(async () => {
+  const db = await new MongoDBClient().init();
+  return sweepScheduledPosts(db.posts() as never, async (doc) => {
+    const [withAuthor] = await withAuthors(db.users(), [doc]);
+    await publishPost(withAuthor as unknown as BlogPost);
+  });
+});
+
 async function ensureNotificationIndexes() {
   try {
     const db = await new MongoDBClient().init();
@@ -45,6 +58,9 @@ async function ensureNotificationIndexes() {
       db.blockedUsers().createIndex({ blockerId: 1, blockedId: 1 }, { unique: true }),
       db.blockedUsers().createIndex({ blockedId: 1 }),
       db.userSettings().createIndex({ userId: 1 }, { unique: true }),
+      // Only unpublished posts are indexed, so these stay tiny.
+      db.posts().createIndex({ scheduledFor: 1 }, { partialFilterExpression: { scheduledFor: { $exists: true } } }),
+      db.posts().createIndex({ UserId: 1, scheduledFor: 1 }, { partialFilterExpression: { scheduledFor: { $exists: true } } }),
     ]);
     await ensureInAppIndexes(db);
   } catch (error) {

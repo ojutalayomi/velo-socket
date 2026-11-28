@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { sanitizeLocation, sanitizePoll } from '../../lib/postExtras.js';
+import { sanitizeGif, sanitizeLocation, sanitizePoll } from '../../lib/postExtras.js';
 
 test('sanitizePoll trims, dedupes and enforces option bounds', () => {
   const poll = sanitizePoll({ question: ' Best? ', options: ['A', 'a', ' B ', ''], multiple: true });
@@ -33,4 +33,26 @@ test('messageDisplayText hides poll JSON but leaves other content alone', () => 
   assert.equal(messageDisplayText('Poll', content), '📊 Lunch?');
   assert.equal(messageDisplayText('Markdown', content), content);
   assert.equal(messageDisplayText('Poll', 'garbage'), 'garbage');
+});
+
+test('sanitizeGif keeps only a KLIPY link, with bounded sizes', () => {
+  const good = { provider: 'klipy', kind: 'gifs', slug: 'cat-1', url: 'https://static.klipy.com/a.webp', title: ' Cat ', width: 320.4, height: 240 };
+  assert.deepEqual(sanitizeGif(good), { provider: 'klipy', kind: 'gifs', slug: 'cat-1', url: 'https://static.klipy.com/a.webp', title: 'Cat', width: 320, height: 240 });
+  assert.equal(sanitizeGif({ ...good, kind: 'stickers' })?.kind, 'stickers');
+  for (const bad of [
+    { ...good, url: 'https://evil.example.com/a.webp' },
+    { ...good, url: 'http://static.klipy.com/a.webp' },
+    { ...good, url: 'https://klipy.com.evil.com/a.webp' },
+    { ...good, provider: 'giphy' },
+    { ...good, kind: 'videos' },
+    { ...good, slug: '' },
+    { ...good, url: 'https://static.klipy.com/' + 'a'.repeat(600) },
+    null,
+    'gif',
+  ]) {
+    assert.equal(sanitizeGif(bad), null);
+  }
+  const sized = sanitizeGif({ ...good, width: -5, height: 99999 });
+  assert.equal(sized?.width, undefined);
+  assert.equal(sized?.height, undefined);
 });
