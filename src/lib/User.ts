@@ -3,6 +3,11 @@ import { ObjectId } from "mongodb";
 import { MongoDBClient } from "../mongodb.js";
 import { AccountType, Theme, UserSchema } from "../types.js";
 
+/** Keep in step with hasBotHandle in the web repo (src/lib/botAccount.ts). */
+function hasBotHandle(...values: Array<string | null | undefined>): boolean {
+  return values.some((v) => /(^|[\s_.\-])bot($|[\s_.\-])/i.test(String(v ?? "")));
+}
+
 /**
  * Represents a user object based on the provided MongoDB document structure.
  */
@@ -104,19 +109,20 @@ export class SocialMediaUser implements UserSchema {
     this.isFollowing = data.isFollowing || false;
 
     // Inferred/Default Type
-    this.accountType = this.inferAccountType(data);
+    this.accountType = data.accountType || this.inferAccountType(data);
   }
 
-  // A helper function to infer the account type
+  // Only runs for accounts with no stored accountType. Explicit signals only, never loose substrings.
   private inferAccountType(data: UserSchema): AccountType {
-    if (data.name.toLowerCase().includes("bot") || data.username.toLowerCase().includes("bot")) {
+    const aiBotId = process.env.AI_BOT_USER_ID;
+    if ((aiBotId && String(data._id) === aiBotId) || hasBotHandle(data.name, data.username)) {
       return AccountType.BOT;
-    } else if (data.verified && data.website) {
+    }
+    if (data.verified && data.website) {
       // A common pattern for brands/public figures
       return AccountType.ORGANIZATION;
-    } else {
-      return AccountType.HUMAN;
     }
+    return AccountType.HUMAN;
   }
 
   /**

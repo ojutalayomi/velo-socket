@@ -35,6 +35,7 @@ const toOpenRouterMessage = (message: MessageAttributes, humanUserId: string) =>
 };
 
 const chatHandler: RequestHandler = async (req, res) => {
+  const botId = process.env.AI_BOT_USER_ID;
   let bot: SocialMediaUser | null = null;
   try {
     // Without this anyone could post into a bot chat as any user, and use the AI for free.
@@ -61,14 +62,12 @@ const chatHandler: RequestHandler = async (req, res) => {
 
     const db = await new MongoDBClient().init();
     const extractedReceiver = await db.users().findOne({ _id: new ObjectId(req.body.messages[req.body.messages.length - 1].receiverId) }) as UserSchema;
-    console.info(extractedReceiver)
     bot = new SocialMediaUser(
       extractedReceiver
     );
-    console.info(bot.getClientSafeData())
 
     // The reply is posted as the receiver, so the receiver must really be a bot.
-    if (bot.isUserNull() || bot.accountType !== 'bot') {
+    if (bot.isUserNull() || bot._id.toString() !== botId) {
       console.error("Bot user not found.");
       res.status(400).json({ error: "Bot user not found." });
       return;
