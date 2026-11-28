@@ -37,7 +37,12 @@ io.use(async (socket: UserSocket, next) => {
   try {
     const db = await getMongoDb();
     const user = await db.collection('Users').findOne({ _id: new ObjectId(token.toString()) });
-    if (user?._id) {
+    if (user?._id && user.suspended === true) {
+      // Told apart from a bad login so the app can show why, instead of retrying forever.
+      const suspended = new Error('Account suspended');
+      (suspended as Error & { data?: unknown }).data = { code: 'suspended' };
+      next(suspended);
+    } else if (user?._id) {
       next();
     } else {
       next(new Error('Authentication error'));

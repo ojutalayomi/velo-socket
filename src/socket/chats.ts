@@ -674,6 +674,24 @@ io.on('connection', async (socket: UserSocket) => {
         ack?.();
       }
     });
+
+    // The web API says an admin just suspended someone. The flag is re-read, so a forged payload
+    // cannot disconnect anyone who is not actually suspended.
+    socket.on('account:suspended', async (data: { userId?: unknown }, ack?: () => void) => {
+      try {
+        const targetId = typeof data?.userId === 'string' ? data.userId : '';
+        if (ObjectId.isValid(targetId)) {
+          const target = await db.users().findOne({ _id: new ObjectId(targetId) }, { projection: { suspended: 1 } });
+          if (target?.suspended === true) {
+            io.in(`user:${targetId}`).emit('accountSuspended', { userId: targetId });
+            io.in(`user:${targetId}`).disconnectSockets(true);
+          }
+        }
+      } catch (error) {
+        console.error('Error in account:suspended event:', error);
+      }
+      ack?.();
+    });
   } catch (error) {
     console.error('Unexpected error in socket connection handler:', error);
     socket.emit('chatError', { error: 'An unexpected error occurred' });

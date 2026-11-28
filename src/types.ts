@@ -65,6 +65,7 @@ export type UserSchema = {
   followers?: number,
   following?: number,
   isEmailConfirmed: boolean,
+  suspended?: boolean,
   isFollowing?: boolean,
   isPrivate?: boolean,
   lastLogin?: string,
